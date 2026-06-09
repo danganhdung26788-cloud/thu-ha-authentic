@@ -129,7 +129,7 @@
     }
     @keyframes scanMove { 0%{top:0} 50%{top:calc(100% - 2px)} 100%{top:0} }
 
-    #camStatus {
+    #camStatus, #testCamStatus {
       position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
       background: rgba(0,0,0,.65); color: #fff;
       padding: 5px 14px; border-radius: 20px;
@@ -213,6 +213,36 @@
 </div>
 
 <div class="body">
+
+  <!-- ═══════════ CAMERA TEST — LUÔN HIỂN THỊ, KHÔNG CẦN PIN ═══════════ -->
+  <div id="camTestCard" class="card">
+    <div class="sh">🔧 Kiểm tra camera</div>
+    <p class="meta" style="margin:0 0 12px">Không cần kết nối POS — kiểm tra camera trực tiếp.</p>
+
+    <div class="cam-actions">
+      <button type="button" id="btnTestCam"     class="btn btn-dark" onclick="testCamera()">📷 Kiểm tra camera</button>
+      <button type="button" id="btnStopTestCam" class="btn btn-stop" onclick="stopTestCamera()" hidden>⏹ Dừng camera</button>
+    </div>
+
+    <div id="testCamPanel" class="cam-panel" hidden>
+      <video id="testVideo" autoplay muted playsinline></video>
+      <div class="scan-frame">
+        <div class="sf-c sf-tl"></div>
+        <div class="sf-c sf-tr"></div>
+        <div class="sf-c sf-bl"></div>
+        <div class="sf-c sf-br"></div>
+        <div class="scan-line"></div>
+      </div>
+      <div id="testCamStatus">Đang mở camera…</div>
+    </div>
+
+    <div id="testCamResult" style="display:none"></div>
+
+    <details class="camera-debug">
+      <summary>Chi tiết kỹ thuật</summary>
+      <pre id="testDebugLog"></pre>
+    </details>
+  </div>
 
   <!-- ═══════════ PIN SCREEN ═══════════ -->
   <div id="pinScreen" class="card">
@@ -306,16 +336,12 @@
 // ▶ CẤU HÌNH — CẬP NHẬT SAU KHI DEPLOY APPS SCRIPT MỚI
 // ============================================================================
 /**
- * URL của Apps Script Web App deployment.
- * Lấy sau khi clasp push + Deploy → "Manage deployments" trong Apps Script editor.
- * Ví dụ: https://script.google.com/macros/s/<DEPLOYMENT_ID>/exec
- *
- * ⚠️  KHÔNG dùng URL /dev (chỉ chạy được khi đăng nhập Google).
- *      Phải dùng URL deployed chính thức (có execution mode "Anyone").
+ * URL của Apps Script Web App deployment (bản deployed chính thức — không phải /dev).
+ * ⚠️  Phải dùng URL có execution mode "Anyone" để JSONP hoạt động không cần đăng nhập.
+ * Cập nhật URL này sau mỗi lần deploy mới: Apps Script editor → Deploy → Manage deployments.
  */
 var APPS_SCRIPT_EXEC_URL =
-  'https://script.google.com/macros/s/AKfycbwtqVLdTyzBYjYe0AE5oeTPxI7eoLdCJtEL1atn_FToYBHE7UhxsHyx0fIlLB7BOG2e/exec';
-//  ↑ Thay bằng URL deployment mới của Rebuild V1 khi deploy production
+  'https://script.google.com/macros/s/AKfycbyygFCyhFuFlzsYj-XgBvC9-1A-3-iZUUXCdPsSk82Lo-ys21lr5hu7Cbyguiyksz-J/exec';
 
 // ============================================================================
 // SESSION STATE
@@ -350,71 +376,87 @@ var DESIRED_FORMATS = [
 ];
 
 // ============================================================================
-// AUTO-CONNECT TỪ URL ?pin=XXXXXX
+// AUTO-CONNECT TỪ URL ?pin=XXXXXX (PIN luôn là 6 chữ số)
 // ============================================================================
 (function () {
   try {
-    var params = new URLSearchParams(window.location.search);
-    var urlPin = String(params.get('pin') || '').trim();
-    if (/^\d{4,8}$/.test(urlPin)) {
-      document.getElementById('pinInput').value = urlPin;
-      // Tự động kết nối sau 200ms để DOM đã render
-      setTimeout(connectSession, 200);
+    var queryParams = new URLSearchParams(window.location.search);
+    var pinFromUrl  = String(queryParams.get('pin') || '').trim();
+    if (/^\d{6}$/.test(pinFromUrl)) {
+      document.getElementById('pinInput').value = pinFromUrl;
+      // Tự động kết nối sau 250ms để DOM render xong
+      setTimeout(connectSession, 250);
     }
   } catch (_) {}
 })();
 
 // ============================================================================
-// JSONP HELPER — tránh CORS vì Apps Script không trả Access-Control-Allow-Origin
+// JSONP HELPER
+// Apps Script không hỗ trợ CORS tự do → dùng JSONP (script tag injection).
 // ============================================================================
 /**
- * Gọi Apps Script API qua JSONP.
- * @param {Object} params — query string params (không bao gồm callback)
- * @returns {Promise<Object>} — response JSON
+ * Gọi Apps Script scanner API qua JSONP.
+ * @param {Object} params — tham số gửi lên (không kể callback)
+ * @returns {Promise<Object>}
  */
 function callScannerApi(params) {
   return new Promise(function (resolve, reject) {
-    var cbName =
+    var callbackName =
       '__thaScannerCb_' +
       Date.now() +
       '_' +
-      Math.random().toString(36).slice(2, 8);
+      Math.random().toString(36).slice(2);
 
-    var script  = document.createElement('script');
-    var timer   = null;
+    var script        = document.createElement('script');
+    var callbackCalled = false;
+
+    var timeout = setTimeout(function () {
+      cleanup();
+      reject(new Error('Không nhận được phản hồi từ Apps Script.'));
+    }, 15000);
 
     function cleanup() {
-      clearTimeout(timer);
-      try { delete window[cbName]; } catch (_) { window[cbName] = undefined; }
+      clearTimeout(timeout);
+      try { delete window[callbackName]; } catch (_) { window[callbackName] = undefined; }
       if (script.parentNode) script.parentNode.removeChild(script);
     }
 
-    timer = setTimeout(function () {
+    window[callbackName] = function (response) {
+      callbackCalled = true;
       cleanup();
-      reject(new Error('Không nhận được phản hồi từ máy chủ (timeout 12s)'));
-    }, 12000);
-
-    window[cbName] = function (res) {
-      cleanup();
-      if (res && res.ok) {
-        resolve(res);
+      if (response && response.ok) {
+        resolve(response);
       } else {
-        reject(new Error((res && res.message) || 'Không gửi được mã'));
+        reject(new Error(
+          response && response.message
+            ? response.message
+            : 'Không kết nối được phiên POS.'
+        ));
       }
     };
 
-    var allParams = Object.assign({}, params, { callback: cbName });
-    var qs = Object.keys(allParams)
-      .map(function (k) {
-        return encodeURIComponent(k) + '=' + encodeURIComponent(String(allParams[k]));
-      })
-      .join('&');
+    var query = new URLSearchParams();
+    Object.keys(params || {}).forEach(function (key) {
+      query.set(key, String(params[key] == null ? '' : params[key]));
+    });
+    query.set('callback', callbackName);
+    query.set('_', String(Date.now())); // cache buster
 
-    script.src    = APPS_SCRIPT_EXEC_URL + '?' + qs;
-    script.async  = true;
+    script.src   = APPS_SCRIPT_EXEC_URL + '?' + query.toString();
+    script.async = true;
+
+    script.onload = function () {
+      if (!callbackCalled) {
+        // Script tải xong nhưng callback không chạy — endpoint trả sai content type
+        console.error('[SCANNER] Script loaded nhưng callback chưa chạy. URL:', script.src);
+      }
+    };
+
     script.onerror = function () {
       cleanup();
-      reject(new Error('Không kết nối được Apps Script. Kiểm tra URL hoặc kết nối mạng.'));
+      reject(new Error(
+        'Không tải được endpoint Apps Script. Kiểm tra URL deployment.'
+      ));
     };
 
     document.head.appendChild(script);
@@ -425,29 +467,34 @@ function callScannerApi(params) {
 // PIN / SESSION
 // ============================================================================
 function connectSession() {
-  var pin = String(document.getElementById('pinInput').value || '').trim();
-  var errEl = document.getElementById('pinError');
+  var pinCode = String(document.getElementById('pinInput').value || '').trim();
+  var errEl   = document.getElementById('pinError');
   errEl.textContent = '';
 
-  if (!/^\d{4,8}$/.test(pin)) {
-    errEl.textContent = 'Mã PIN phải là 4–8 chữ số.';
+  // PIN luôn là đúng 6 chữ số
+  if (!/^\d{6}$/.test(pinCode)) {
+    errEl.textContent = 'Vui lòng nhập đúng PIN 6 chữ số.';
     return;
   }
 
   setBtn('btnConnect', true, 'Đang kết nối…');
 
-  // Gửi __PING__ để xác thực session vẫn active
-  callScannerApi({ action: 'push_pos_scan', pin_code: pin, barcode: '__PING__' })
-    .then(function () {
-      currentPin = pin;
-      // Lưu PIN trong sessionStorage (không dùng localStorage — chỉ trong phiên tab)
-      try { sessionStorage.setItem('thaPosPin', pin); } catch (_) {}
-      showScanScreen(pin);
-    })
-    .catch(function (err) {
-      errEl.textContent = err.message || 'Mã PIN không đúng hoặc phiên đã hết hạn.';
-      setBtn('btnConnect', false, 'Kết nối');
-    });
+  // Gửi __PING__ để xác thực phiên active — Apps Script KHÔNG ghi vào POSScanItems
+  callScannerApi({
+    action:   'push_pos_scan',
+    pin_code: pinCode,
+    barcode:  '__PING__'
+  })
+  .then(function (response) {
+    currentPin = pinCode;
+    // Lưu PIN trong sessionStorage (không dùng localStorage — chỉ trong phiên tab)
+    try { sessionStorage.setItem('tha_pos_scan_pin', pinCode); } catch (_) {}
+    showScanScreen(pinCode);
+  })
+  .catch(function (err) {
+    errEl.textContent = err.message || 'Mã PIN không đúng hoặc phiên đã hết hạn.';
+    setBtn('btnConnect', false, 'Kết nối');
+  });
 }
 
 function showScanScreen(pin) {
@@ -469,7 +516,7 @@ function disconnectSession() {
   stopCamera('session-closed');
   currentPin  = '';
   scanHistory = [];
-  try { sessionStorage.removeItem('thaPosPin'); } catch (_) {}
+  try { sessionStorage.removeItem('tha_pos_scan_pin'); } catch (_) {}
   document.getElementById('scanScreen').style.display = 'none';
   document.getElementById('pinScreen').style.display  = '';
   document.getElementById('statusDot').classList.remove('live');
@@ -479,11 +526,11 @@ function disconnectSession() {
   debugLog('session disconnected');
 }
 
-// Khôi phục phiên từ sessionStorage nếu có
+// Khôi phục PIN từ sessionStorage nếu có (không auto-connect — người dùng phải bấm Kết nối)
 (function () {
   try {
-    var saved = sessionStorage.getItem('thaPosPin');
-    if (saved && /^\d{4,8}$/.test(saved)) {
+    var saved = sessionStorage.getItem('tha_pos_scan_pin');
+    if (saved && /^\d{6}$/.test(saved)) {
       document.getElementById('pinInput').value = saved;
     }
   } catch (_) {}
@@ -1017,6 +1064,382 @@ document.addEventListener('keydown', function (e) {
     if (si && document.activeElement !== si && currentPin) si.focus();
   }
 });
+
+// ============================================================================
+// CAMERA TEST — độc lập hoàn toàn với phiên POS
+// Không gọi Apps Script, không kiểm tra PIN, không gửi barcode về POS.
+// Camera chỉ dừng khi bấm "Dừng camera" (hoặc pagehide/beforeunload).
+// ============================================================================
+
+var _tc = {
+  stream:   null,
+  running:  false,
+  gen:      0,
+  timerId:  null,
+  detector: null,
+  mode:     'none'   // 'native' | 'zxing' | 'none'
+};
+var _tcDetBusy  = false;
+var _tcLastCode = '';
+var _tcLastAt   = 0;
+
+/** Entry point — nút "Kiểm tra camera" */
+function testCamera() {
+  if (_tc.running) return;
+  var gen = ++_tc.gen;
+
+  _tcSetBtn(true, false);          // disable nút test
+  _tcResult(null, null);           // xóa kết quả cũ
+  document.getElementById('testCamPanel').hidden = true;
+  _tcStatus('Đang mở camera…');
+
+  _tcLog('=== Kiểm tra camera ===');
+  _tcLog('origin: '          + location.origin);
+  _tcLog('isSecureContext: ' + window.isSecureContext);
+  _tcLog('mediaDevices: '    + (typeof navigator.mediaDevices !== 'undefined'));
+  _tcLog('getUserMedia: '    + !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
+
+  _tcStartAsync(gen);
+}
+
+async function _tcStartAsync(gen) {
+  try {
+    // Kiểm tra API tồn tại trước
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      var apiErr = new Error('navigator.mediaDevices.getUserMedia không tồn tại trên trình duyệt này.');
+      apiErr.name = 'APINotFound';
+      throw apiErr;
+    }
+
+    var stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode: { ideal: 'environment' },   // ưu tiên camera sau
+        width:  { ideal: 1280 },
+        height: { ideal: 720 }
+      }
+    });
+
+    if (gen !== _tc.gen) {
+      stream.getTracks().forEach(function (t) { t.stop(); });
+      return;
+    }
+
+    _tc.stream  = stream;
+    _tc.running = true;
+
+    // Gắn stream vào video và show panel ngay
+    var vid = document.getElementById('testVideo');
+    vid.srcObject = stream;
+    vid.muted = true;
+    document.getElementById('testCamPanel').hidden = false;
+
+    // Chờ video ready (timeout 8s)
+    await _tcWaitReady(vid);
+    await vid.play();
+
+    if (gen !== _tc.gen) return;
+
+    var track = (stream.getVideoTracks() || [])[0] || null;
+    _tcLog('track: '  + (track ? track.label : 'N/A'));
+    _tcLog('video: '  + vid.videoWidth + 'x' + vid.videoHeight);
+    if (track && track.getSettings) {
+      var s = track.getSettings();
+      _tcLog('facing: ' + (s.facingMode || '?') + '  device: ' + (s.deviceId ? s.deviceId.slice(0,8) : '?'));
+    }
+
+    // ── Camera mở thành công ──────────────────────────────────────────────
+    _tcStatus('Camera hoạt động bình thường');
+    _tcResult(true, 'Camera hoạt động bình thường');
+    _tcSetBtn(false, true);   // ẩn btnTestCam, hiện btnStopTestCam
+
+    // Giám sát track.ended — log nhưng KHÔNG gọi stopTestCamera()
+    if (track) {
+      track.addEventListener('ended', function () {
+        _tc.running = false;
+        if (_tc.timerId) { clearInterval(_tc.timerId); _tc.timerId = null; }
+        _tcLog('⚠ track.ended — hệ thống dừng camera ngoài ý muốn');
+        document.getElementById('testCamPanel').hidden = true;
+        _tcResult(false,
+          'error.name:          TrackEnded\n' +
+          'error.message:       Camera bị hệ thống dừng (cuộc gọi đến / ứng dụng khác)\n' +
+          'location.origin:     ' + location.origin + '\n' +
+          'isSecureContext:     ' + window.isSecureContext + '\n' +
+          'navigator.mediaDevices: ' + (typeof navigator.mediaDevices !== 'undefined')
+        );
+        _tcSetBtn(false, false);  // hiện lại btnTestCam
+      });
+    }
+
+    // ── Khởi tạo detector SAU KHI camera ổn định ────────────────────────
+    // LỖI DETECTOR KHÔNG BAO GIỜ ĐƯỢC TẮT CAMERA
+    await _tcInitDetector(vid);
+
+  } catch (err) {
+    // getUserMedia thất bại — camera chưa mở được
+    _tc.running = false;
+    document.getElementById('testCamPanel').hidden = true;
+    _tcSetBtn(false, false);
+
+    var name = err.name    || 'UnknownError';
+    var msg  = err.message || '';
+    _tcLog('ERROR ' + name + ': ' + msg);
+
+    // Hiện đầy đủ thông tin chẩn đoán
+    _tcResult(false,
+      'error.name:          ' + name + '\n' +
+      'error.message:       ' + msg + '\n' +
+      'location.origin:     ' + location.origin + '\n' +
+      'isSecureContext:     ' + window.isSecureContext + '\n' +
+      'navigator.mediaDevices: ' + (typeof navigator.mediaDevices !== 'undefined')
+    );
+  }
+}
+
+/** Chờ video có dữ liệu — timeout 8 giây */
+function _tcWaitReady(vid) {
+  if (vid.readyState >= 2 && vid.videoWidth > 0) return Promise.resolve();
+  return new Promise(function (resolve, reject) {
+    var timer = setTimeout(function () {
+      cleanup();
+      var e = new Error('Video không hiển thị sau 8 giây — thử tải lại trang.');
+      e.name = 'VideoReadyTimeout';
+      reject(e);
+    }, 8000);
+    function onOk()  { if (vid.videoWidth > 0) { cleanup(); resolve(); } }
+    function onErr() { cleanup(); reject(vid.error || new Error('VideoError')); }
+    function cleanup() {
+      clearTimeout(timer);
+      vid.removeEventListener('loadedmetadata', onOk);
+      vid.removeEventListener('canplay',        onOk);
+      vid.removeEventListener('error',          onErr);
+    }
+    vid.addEventListener('loadedmetadata', onOk);
+    vid.addEventListener('canplay',        onOk);
+    vid.addEventListener('error',          onErr);
+  });
+}
+
+/**
+ * Khởi tạo detector sau khi camera ổn định.
+ * LỖI BẤT KỲ KHÔNG ĐƯỢC TẮT CAMERA — video luôn tiếp tục.
+ */
+async function _tcInitDetector(vid) {
+  _tc.detector = null;
+  _tc.mode     = 'none';
+  _tcDetBusy   = false;
+
+  var hasBD = 'BarcodeDetector' in window;
+  _tcLog('BarcodeDetector in window: ' + hasBD);
+
+  // Thử BarcodeDetector (Chrome Android 9+ có sẵn)
+  if (hasBD) {
+    try {
+      var formats = ['code_128', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'qr_code', 'data_matrix'];
+      if (typeof BarcodeDetector.getSupportedFormats === 'function') {
+        try {
+          var sup = await BarcodeDetector.getSupportedFormats();
+          var filtered = formats.filter(function (f) { return sup.indexOf(f) !== -1; });
+          if (filtered.length) formats = filtered;
+        } catch (_) {}
+      }
+      _tc.detector = new BarcodeDetector({ formats: formats });
+      _tc.mode = 'native';
+      _tcLog('✓ BarcodeDetector OK: ' + formats.join(', '));
+      _tcStatus('Camera mở. BarcodeDetector sẵn sàng — đưa mã vào khung.');
+      _tcResult(true, 'Camera hoạt động bình thường\nDetector: BarcodeDetector (native)');
+      _tcStartScanLoop(vid);
+      return;
+    } catch (e) {
+      // Detector thất bại → camera VẪN CHẠY, thử ZXing
+      _tcLog('✗ BarcodeDetector lỗi: ' + e.message + ' → thử ZXing');
+    }
+  } else {
+    _tcLog('BarcodeDetector N/A → thử ZXing CDN');
+  }
+
+  // Thử ZXing fallback
+  _tcStatus('Camera mở. Đang tải bộ quét dự phòng (ZXing)…');
+  try {
+    if (!window.ZXing || !window.ZXing.BrowserMultiFormatReader) {
+      await _tcLoadZXing();
+    }
+    var ZLib = window.ZXing;
+    if (!ZLib || !ZLib.BrowserMultiFormatReader) {
+      throw new Error('window.ZXing.BrowserMultiFormatReader không tồn tại sau khi load');
+    }
+    _tc.detector = new ZLib.BrowserMultiFormatReader();
+    _tc.mode = 'zxing';
+    _tcLog('✓ ZXing ready (sync decode)');
+    _tcStatus('Camera mở. ZXing sẵn sàng — đưa mã vào khung.');
+    _tcResult(true, 'Camera hoạt động bình thường\nDetector: ZXing (fallback CDN)');
+    _tcStartScanLoop(vid);
+  } catch (e) {
+    // ZXing cũng thất bại — camera VẪN TIẾP TỤC CHẠY
+    _tcLog('✗ ZXing lỗi: ' + e.message);
+    _tc.mode = 'none';
+    _tcStatus('Camera mở. Không tự đọc được mã — nhập thủ công hoặc dùng máy quét Bluetooth.');
+    _tcResult(true,
+      'Camera hoạt động bình thường\n' +
+      'Detector: không có (ZXing load thất bại)\n' +
+      'Camera vẫn chạy — detector lỗi không ảnh hưởng video.'
+    );
+    // KHÔNG gọi stopTestCamera() — camera tiếp tục hiển thị video
+  }
+}
+
+function _tcLoadZXing() {
+  return new Promise(function (resolve, reject) {
+    var s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';
+    s.onload = function () {
+      (window.ZXing && window.ZXing.BrowserMultiFormatReader)
+        ? resolve()
+        : reject(new Error('ZXing global missing sau khi load'));
+    };
+    s.onerror = function () { reject(new Error('ZXing CDN load thất bại')); };
+    document.head.appendChild(s);
+  });
+}
+
+function _tcStartScanLoop(vid) {
+  if (_tc.timerId) clearInterval(_tc.timerId);
+  _tc.timerId = setInterval(function () { _tcDetectFrame(vid); }, 300);
+  _tcLog('Scan loop bắt đầu: ' + _tc.mode);
+}
+
+function _tcDetectFrame(vid) {
+  if (!_tc.running || !_tc.stream) return;
+  if (_tcDetBusy) return;
+  if (!vid || vid.readyState < 2 || vid.videoWidth === 0) return;
+
+  if (_tc.mode === 'native' && _tc.detector) {
+    _tcDetBusy = true;
+    _tc.detector.detect(vid)
+      .then(function (results) {
+        _tcDetBusy = false;
+        if (results && results.length > 0) {
+          _tcOnCode(String(results[0].rawValue || '').trim());
+        }
+      })
+      .catch(function (e) {
+        _tcDetBusy = false;
+        // Lỗi detect KHÔNG dừng camera — chỉ log nếu không phải lỗi thường
+        if (e && e.name !== 'NotSupportedError' && e.name !== 'InvalidStateError') {
+          _tcLog('detect err: ' + e.name);
+        }
+      });
+
+  } else if (_tc.mode === 'zxing' && _tc.detector) {
+    _tcDetBusy = true;
+    try {
+      var res = _tc.detector.decode(vid);   // synchronous
+      _tcDetBusy = false;
+      if (res) _tcOnCode(res.getText());
+    } catch (e) {
+      _tcDetBusy = false;
+      // NotFoundException bình thường (không có barcode trong frame)
+      if (e && e.constructor && e.constructor.name !== 'NotFoundException') {
+        _tcLog('zxing: ' + (e.constructor ? e.constructor.name : String(e)));
+      }
+    }
+  }
+}
+
+function _tcOnCode(code) {
+  if (!code) return;
+  var now = Date.now();
+  if (code === _tcLastCode && (now - _tcLastAt) < 1800) return;
+  _tcLastCode = code;
+  _tcLastAt   = now;
+
+  _tcLog('✓ Mã đọc được: "' + code + '" [' + _tc.mode + ']');
+  _tcStatus('✓ Đọc được: ' + code);
+  _tcResult(true,
+    'Camera hoạt động bình thường\n' +
+    '✓ Đã đọc mã: "' + code + '"\n' +
+    'Detector: ' + _tc.mode
+  );
+  if (navigator.vibrate) navigator.vibrate(80);
+}
+
+/** Nút "Dừng camera" — cách duy nhất dừng camera test */
+function stopTestCamera() {
+  _tcLog('=== Dừng camera test ===');
+  _tc.gen++;   // invalidate async in-flight
+  if (_tc.timerId) { clearInterval(_tc.timerId); _tc.timerId = null; }
+  if (_tc.stream) {
+    _tc.stream.getTracks().forEach(function (t) { try { t.stop(); } catch (_) {} });
+    _tc.stream = null;
+  }
+  _tc.running  = false;
+  _tc.detector = null;
+  _tc.mode     = 'none';
+  _tcDetBusy   = false;
+  var vid = document.getElementById('testVideo');
+  if (vid) { try { vid.pause(); } catch (_) {} vid.srcObject = null; }
+  document.getElementById('testCamPanel').hidden = true;
+  _tcSetBtn(false, false);
+}
+
+// Giải phóng camera test khi trang đóng
+window.addEventListener('pagehide',     function () { stopTestCamera(); });
+window.addEventListener('beforeunload', function () { stopTestCamera(); });
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+
+function _tcSetBtn(testDisabled, showStop) {
+  var btnTest = document.getElementById('btnTestCam');
+  var btnStop = document.getElementById('btnStopTestCam');
+  if (btnTest) { btnTest.disabled = !!testDisabled; btnTest.hidden = !!showStop; }
+  if (btnStop) { btnStop.hidden = !showStop; }
+}
+
+function _tcStatus(t) {
+  var el = document.getElementById('testCamStatus');
+  if (el) el.textContent = t || '';
+}
+
+/**
+ * Hiển thị kết quả kiểm tra camera.
+ * ok=true  → xanh lá (thành công)
+ * ok=false → đỏ monospace (lỗi với thông tin chẩn đoán)
+ * ok=null  → ẩn
+ */
+function _tcResult(ok, text) {
+  var el = document.getElementById('testCamResult');
+  if (!el) return;
+  if (ok === null || ok === undefined || text === null || text === undefined) {
+    el.style.display = 'none';
+    return;
+  }
+  if (ok) {
+    el.style.cssText =
+      'display:block;margin-top:12px;padding:12px 14px;border-radius:10px;' +
+      'background:#f0fdf4;border:1.5px solid #86efac;' +
+      'color:#15803d;font-weight:700;white-space:pre-wrap;font-size:13px;line-height:1.7';
+  } else {
+    el.style.cssText =
+      'display:block;margin-top:12px;padding:12px 14px;border-radius:10px;' +
+      'background:#fef2f2;border:1.5px solid #fca5a5;' +
+      'color:#b91c1c;font-weight:600;white-space:pre-wrap;' +
+      'font-size:12px;font-family:Consolas,monospace;line-height:1.7';
+  }
+  el.textContent = String(text || '');
+}
+
+function _tcLog(msg, data) {
+  var el = document.getElementById('testDebugLog');
+  if (!el) return;
+  var line = '[' + new Date().toLocaleTimeString() + '] ' + msg +
+    (data ? ' ' + JSON.stringify(data) : '');
+  var lines = (el.textContent || '').split('\n').filter(Boolean);
+  lines.push(line);
+  if (lines.length > 80) lines = lines.slice(-80);
+  el.textContent = lines.join('\n');
+  el.scrollTop = el.scrollHeight;
+  console.log('[TC]', msg, data || '');
+}
 </script>
 </body>
 </html>
