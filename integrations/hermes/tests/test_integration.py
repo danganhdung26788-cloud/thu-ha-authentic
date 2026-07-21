@@ -1,8 +1,10 @@
 import hashlib
 import hmac
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from integrations.hermes.meta_messenger_bridge import verify_signature
 from integrations.hermes.telegram_dispatcher import Settings, StateStore, choose_thread, eligible
@@ -40,6 +42,19 @@ class TelegramDispatcherTests(unittest.TestCase):
         self.assertFalse(store.already_sent("evt-1"))
         store.mark_sent("evt-1", "123")
         self.assertTrue(store.already_sent("evt-1"))
+
+    def test_dry_run_does_not_require_bot_token(self):
+        env = {"THA_TELEGRAM_DRY_RUN": "true"}
+        with patch.dict(os.environ, env, clear=True):
+            settings = Settings.from_env()
+        self.assertTrue(settings.dry_run)
+        self.assertEqual(settings.bot_token, "dry-run-token-not-used")
+
+    def test_live_run_requires_bot_token(self):
+        env = {"THA_TELEGRAM_DRY_RUN": "false"}
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(RuntimeError):
+                Settings.from_env()
 
 
 class MetaBridgeTests(unittest.TestCase):
