@@ -28,8 +28,8 @@ if [ -f /opt/data/.env ]; then
   . /opt/data/.env
   set +a
 fi
-export GOOGLE_APPLICATION_CREDENTIALS=\"`$CREDENTIALS\"
-export PYTHONPATH=\"`$ROOT:`$ROOT/.vendor\"
+export GOOGLE_APPLICATION_CREDENTIALS="`$CREDENTIALS"
+export PYTHONPATH="`$ROOT:`$ROOT/.vendor"
 THA_FANPAGE_DRAFT_DRY_RUN=$DryRunValue python -m integrations.hermes.fanpage_draft_processor
 "@
 
