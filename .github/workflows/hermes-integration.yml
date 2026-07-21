@@ -10,6 +10,7 @@ on:
       - main
     paths:
       - 'integrations/hermes/**'
+      - '.github/workflows/hermes-integration.yml'
 
 permissions:
   contents: read
@@ -31,4 +32,4 @@ jobs:
       - name: Compile
         run: python -m compileall integrations/hermes
       - name: Unit tests
-        run: python -m unittest integrations.hermes.tests.test_integration
+        run: python -m unittest discover -s integrations/hermes/tests -t . -p 'test_*.py'
