@@ -7,17 +7,25 @@ $DestinationRoot = Join-Path $HermesData 'tha-integrations'
 $DestinationIntegrations = Join-Path $DestinationRoot 'integrations'
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $SourceIntegrations = Join-Path $RepoRoot 'integrations'
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
-function Invoke-HermesShell {
+function Write-LfFile {
     param(
-        [Parameter(Mandatory = $true)][string]$Command,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Content
+    )
+
+    $normalized = $Content -replace "`r`n", "`n" -replace "`r", "`n"
+    [System.IO.File]::WriteAllText($Path, $normalized, $Utf8NoBom)
+}
+
+function Invoke-HermesScript {
+    param(
+        [Parameter(Mandatory = $true)][string]$ContainerPath,
         [Parameter(Mandatory = $true)][string]$FailureMessage
     )
 
-    # PowerShell here-strings use CRLF on Windows. BusyBox/Debian sh may treat
-    # the carriage return as part of a command, so normalize before docker exec.
-    $normalized = $Command -replace "`r", ''
-    docker exec $Container /bin/sh -lc $normalized
+    docker exec $Container /bin/sh $ContainerPath
     if ($LASTEXITCODE -ne 0) {
         throw $FailureMessage
     }
@@ -41,10 +49,12 @@ New-Item -ItemType Directory -Force -Path $DestinationRoot | Out-Null
 if (Test-Path $DestinationIntegrations) {
     Remove-Item -Path $DestinationIntegrations -Recurse -Force
 }
-# Copy the complete Python package, including integrations/__init__.py.
 Copy-Item -LiteralPath $SourceIntegrations -Destination $DestinationRoot -Recurse -Force
 
-$installCommand = @'
+$bootstrapHostPath = Join-Path $DestinationRoot 'bootstrap_install.sh'
+$bootstrapContainerPath = '/opt/data/tha-integrations/bootstrap_install.sh'
+$bootstrapScript = @'
+#!/bin/sh
 set -eu
 ROOT=/opt/data/tha-integrations
 VENDOR="$ROOT/.vendor"
@@ -73,10 +83,13 @@ fi
 PYTHONPATH="$ROOT:$VENDOR" META_DEDUPE_DB=/tmp/tha-meta-dedupe.db \
 python -m unittest discover -s integrations/hermes/tests -t . -p 'test_*.py'
 '@
+Write-LfFile -Path $bootstrapHostPath -Content $bootstrapScript
+Invoke-HermesScript -ContainerPath $bootstrapContainerPath -FailureMessage 'Dependency bootstrap or unit tests failed.'
 
-Invoke-HermesShell -Command $installCommand -FailureMessage 'Dependency bootstrap or unit tests failed.'
-
-$dryRunCommand = @'
+$dryRunHostPath = Join-Path $DestinationRoot 'telegram_dry_run.sh'
+$dryRunContainerPath = '/opt/data/tha-integrations/telegram_dry_run.sh'
+$dryRunScript = @'
+#!/bin/sh
 set -eu
 ROOT=/opt/data/tha-integrations
 if [ -f /opt/data/.env ]; then
@@ -87,8 +100,8 @@ fi
 PYTHONPATH="$ROOT:$ROOT/.vendor" THA_TELEGRAM_DRY_RUN=true \
 python -m integrations.hermes.telegram_dispatcher
 '@
-
-Invoke-HermesShell -Command $dryRunCommand -FailureMessage 'Telegram dry-run failed.'
+Write-LfFile -Path $dryRunHostPath -Content $dryRunScript
+Invoke-HermesScript -ContainerPath $dryRunContainerPath -FailureMessage 'Telegram dry-run failed.'
 
 Write-Host 'PASS: package installed, unit tests passed, Telegram dry-run executed.'
 Write-Host 'Review TELEGRAM_QUEUE and RUN_LOG before enabling real delivery.'
