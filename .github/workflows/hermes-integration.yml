@@ -31,5 +31,17 @@ jobs:
         run: python -m pip install -r integrations/hermes/requirements.txt
       - name: Compile
         run: python -m compileall integrations/hermes
-      - name: Unit tests
-        run: python -m unittest discover -s integrations/hermes/tests -t . -p 'test_*.py'
+      - name: Background task contract
+        run: python -m unittest -v integrations.hermes.tests.test_background_task_contract
+      - name: Fanpage draft processor
+        run: python -m unittest -v integrations.hermes.tests.test_fanpage_draft_processor
+      - name: Fanpage runner contract
+        run: python -m unittest -v integrations.hermes.tests.test_fanpage_runner_contract
+      - name: Installer contract
+        run: python -m unittest -v integrations.hermes.tests.test_installer_contract
+      - name: Core integration tests
+        run: python -m unittest -v integrations.hermes.tests.test_integration
+      - name: Production hardening contract
+        run: python -m unittest -v integrations.hermes.tests.test_production_hardening_contract
+      - name: Full discovery regression
+        run: python -m unittest discover -v -s integrations/hermes/tests -t . -p 'test_*.py'
