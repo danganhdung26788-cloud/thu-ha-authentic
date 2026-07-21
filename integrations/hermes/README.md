@@ -20,18 +20,29 @@ Gói này loại n8n khỏi đường vận hành. n8n chỉ còn là tài liệ
 
 ## Cài trong Hermes
 
-Sao chép thư mục này vào `/opt/data/integrations/thu-ha-authentic` hoặc mount read-only từ workspace.
+Chạy từ thư mục gốc repository trên Windows:
 
-```bash
-python -m pip install -r requirements.txt
+```powershell
+powershell -ExecutionPolicy Bypass -File .\integrations\hermes\install_and_dry_run.ps1
 ```
 
-Secret chỉ đặt trong `/opt/data/.env`.
+Script sẽ:
+
+1. sao chép toàn bộ package `integrations`, bao gồm `integrations/__init__.py`, vào `D:\HermesAgent\data\tha-integrations`;
+2. kiểm tra container `hermes-gateway`;
+3. tự bootstrap `pip` bằng `ensurepip`, `apk` hoặc `apt-get` khi image chưa có pip;
+4. cài dependency vào thư mục bền vững `/opt/data/tha-integrations/.vendor` thay vì phụ thuộc site-packages của container;
+5. chạy unit test với `PYTHONPATH` đúng;
+6. chạy Telegram dry-run.
+
+Các dòng lệnh gửi vào `/bin/sh` được chuẩn hóa LF để tránh lỗi `: not found` do CRLF của Windows.
+
+Secret chỉ đặt trong `/opt/data/.env`. Dry-run không yêu cầu `TELEGRAM_BOT_TOKEN`; gửi thật vẫn bắt buộc có token.
 
 ## Smoke test Telegram
 
 1. Giữ `THA_TELEGRAM_DRY_RUN=true`.
-2. Chạy `python telegram_dispatcher.py`.
+2. Chạy script cài đặt hoặc `python -m integrations.hermes.telegram_dispatcher` với `PYTHONPATH` gồm package và `.vendor`.
 3. Xác nhận hai bản ghi test chuyển thành `READY_TO_SEND`.
 4. Đặt `THA_TELEGRAM_DRY_RUN=false`.
 5. Chạy lại một lần.
@@ -51,7 +62,8 @@ Adapter giai đoạn đầu chỉ ghi `FANPAGE_QUEUE`, phù hợp UAT an toàn.
 ## Kiểm thử
 
 ```bash
-python -m unittest integrations.hermes.tests.test_integration
+PYTHONPATH=/opt/data/tha-integrations:/opt/data/tha-integrations/.vendor \
+python -m unittest discover -s integrations/hermes/tests -t . -p 'test_*.py'
 ```
 
 ## Điều kiện nghiệm thu
