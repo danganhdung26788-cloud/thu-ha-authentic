@@ -41,9 +41,12 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        dry_run = os.getenv("THA_TELEGRAM_DRY_RUN", "true").lower() == "true"
         token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        if not token and not dry_run:
+            raise RuntimeError("TELEGRAM_BOT_TOKEN is required when dry-run is disabled")
         if not token:
-            raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
+            token = "dry-run-token-not-used"
         return cls(
             bot_token=token,
             fast_index_id=os.getenv(
@@ -59,7 +62,7 @@ class Settings:
             state_db=Path(os.getenv(
                 "THA_TELEGRAM_STATE_DB", "/opt/data/tha-telegram/state.db"
             )),
-            dry_run=os.getenv("THA_TELEGRAM_DRY_RUN", "true").lower() == "true",
+            dry_run=dry_run,
             max_batch=max(1, min(int(os.getenv("THA_TELEGRAM_MAX_BATCH", "20")), 100)),
         )
 
