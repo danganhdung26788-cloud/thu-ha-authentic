@@ -34,22 +34,48 @@ class ProductionHardeningContractTests(unittest.TestCase):
         self.assertNotIn("safe_context_processor", text)
         self.assertNotIn("META_PAGE_ACCESS_TOKEN=", text)
 
-    def test_conversation_runtime_uses_optional_tools_and_grounded_fallbacks(self):
+    def test_conversation_runtime_forces_fast_grounded_product_choice(self):
         text = self.read("conversation_runtime_processor.py")
         self.assertIn("def build_conversation_prompt", text)
         self.assertIn("def call_conversation", text)
-        self.assertIn("def split_natural_response", text)
+        self.assertIn("def infer_forced_request", text)
+        self.assertIn("def fast_product_choice_reply", text)
         self.assertIn("def resolve_product_refs", text)
         self.assertIn("def retrieve_recommendation_candidates", text)
         self.assertIn("def extract_budget_vnd", text)
-        self.assertIn("THA_TOOL", text)
-        self.assertIn("Không chuyển Thu Hà chỉ vì thiếu ngữ cảnh", text)
-        self.assertIn("son môi khoảng 500 nghìn", text)
+        self.assertIn("ACTIVE_TRAINING_MEMORY_PATH", text)
+        self.assertIn("TRAINING ĐANG CÓ HIỆU LỰC", text)
+        self.assertIn("không được giả vờ đã tra kho", text)
+        self.assertIn("chốt nhanh một sản phẩm", text)
+        self.assertIn("Grounded recommendation cannot be sent without PRODUCT_KEY", text)
         self.assertIn('env.setdefault("HERMES_HOME", HERMES_HOME)', text)
         self.assertIn('repo.update_status(row_number, "PROCESSING")', text)
         self.assertNotIn("ConversationPlan", text)
         self.assertNotIn("quick_product_reply(", text)
         self.assertNotIn("nói thêm giúp em một chút về điều chị đang cần", text)
+
+    def test_telegram_training_is_versioned_active_and_does_not_store_dynamic_facts(self):
+        store = self.read("telegram_training_memory.py")
+        skill = self.read("skills/thu-ha-training/SKILL.md")
+        installer = self.read("install_telegram_training_chat.ps1")
+        self.assertIn("class ActiveLesson", store)
+        self.assertIn('status="ACTIVE"', store)
+        self.assertIn("def rollback_latest", store)
+        self.assertIn("audit.jsonl", store)
+        self.assertIn("Do not store price, stock, or promotion values", store)
+        self.assertIn("name: thu-ha-training", skill)
+        self.assertIn("/thu-ha-training", skill)
+        self.assertIn("DANG_ANH_DUNG", skill)
+        self.assertIn("NONG_THU_HA", skill)
+        self.assertIn("python -m integrations.hermes.telegram_training_memory apply", skill)
+        self.assertIn("THA_REPLY_MODE' -Value 'DRAFT_ONLY", installer)
+        self.assertIn("THA_META_AUTO_SEND' -Value 'false", installer)
+        self.assertIn("PRODUCT_KEY_REQUIRED=TRUE", installer)
+        self.assertIn("AUTO_SEND=DISABLED_FOR_LIVE_UAT", installer)
+        self.assertIn("docker restart $GatewayContainer", installer)
+        self.assertIn("docker restart $MetaContainer", installer)
+        self.assertNotIn("TELEGRAM_BOT_TOKEN", installer)
+        self.assertNotIn("gateway run", installer)
 
     def test_legacy_processors_are_not_runtime_entrypoints(self):
         runner = self.read("run_fanpage_draft_background.ps1")
@@ -138,6 +164,7 @@ class ProductionHardeningContractTests(unittest.TestCase):
         for name in (
             "install_natural_cosmetics_agent.ps1",
             "install_realtime_fanpage_reply.ps1",
+            "install_telegram_training_chat.ps1",
             "run_fanpage_draft_background.ps1",
             "configure_natural_meta_reply.ps1",
         ):
