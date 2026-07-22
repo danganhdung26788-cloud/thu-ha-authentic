@@ -43,7 +43,15 @@ class ProductionHardeningContractTests(unittest.TestCase):
             self.assertIn("ExitCode = $exitCode", text)
         configure = self.read("configure_natural_meta_reply.ps1")
         self.assertIn("[switch]$UseExistingToken", configure)
-        self.assertIn("USING_EXISTING_LOCAL_VALUE", configure)
+        self.assertIn("USING_EXISTING_", configure)
+
+    def test_meta_activation_can_reuse_container_token_without_printing_it(self):
+        text = self.read("configure_natural_meta_reply.ps1")
+        self.assertIn("RUNNING_CONTAINER_ENV", text)
+        self.assertIn("META_PAGE_ACCESS_TOKEN_NOT_FOUND_IN_ENV_OR_CONTAINER", text)
+        self.assertIn("printf %s", text)
+        self.assertIn("TOKEN_SOURCE=$tokenSource", text)
+        self.assertNotIn("Write-Host $plainToken", text)
 
     def test_named_tunnel_uses_token_file_not_cli_token(self):
         text = self.read("install_meta_named_tunnel.ps1")
