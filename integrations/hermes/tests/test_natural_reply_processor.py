@@ -59,9 +59,7 @@ class NaturalReplyProcessorTests(unittest.TestCase):
                 processor.call_hermes("prompt")
 
     def test_prompt_contains_only_filtered_grounding(self):
-        with patch.object(processor, "read_text", return_value="memory"), patch.object(
-            processor.SKILL_PATH, "exists", return_value=True
-        ):
+        with patch.object(processor, "read_text", return_value="memory"):
             prompt = processor.build_prompt(
                 "Serum ABC còn hàng không?",
                 [{"MESSAGE_TEXT": "Em hỏi serum ABC"}],
