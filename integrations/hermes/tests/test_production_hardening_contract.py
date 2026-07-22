@@ -8,64 +8,70 @@ class ProductionHardeningContractTests(unittest.TestCase):
     def read(self, name: str) -> str:
         return (ROOT / name).read_text(encoding="utf-8")
 
-    def test_fanpage_background_runner_is_locked_and_uses_ai_first_pipeline(self):
+    def test_fanpage_background_runner_is_locked_and_uses_conversation_runtime(self):
         text = self.read("run_fanpage_draft_background.ps1")
         self.assertIn("Global\HermesThuHaFanpageDraftProcessor", text)
         self.assertIn("THA_AI_FIRST_DRY_RUN=false", text)
-        self.assertIn("ai_first_reply_processor", text)
+        self.assertIn("conversation_runtime_processor", text)
         self.assertIn("meta_outbound_sender", text)
+        self.assertIn('export HERMES_HOME="${HERMES_HOME:-/opt/data}"', text)
         self.assertNotIn("python -m integrations.hermes.safe_context_processor", text)
         self.assertNotIn("python -m integrations.hermes.natural_reply_processor", text)
         self.assertNotIn("graph.facebook.com", text)
 
-    def test_meta_bridge_runs_realtime_pipeline_with_scheduled_fallback(self):
+    def test_meta_bridge_runs_reliable_runtime_with_scheduled_fallback(self):
         text = self.read("meta_messenger_bridge.py")
         self.assertIn("def run_realtime_pipeline", text)
         self.assertIn("PIPELINE_LOCK", text)
-        self.assertIn("ai_first_reply_processor", text)
+        self.assertIn("conversation_runtime_processor", text)
         self.assertIn("processor.process_new_messages", text)
         self.assertIn("sender.send_ready_messages", text)
         self.assertIn("Scheduled Task will retry queued messages", text)
         self.assertIn("REALTIME_NATURAL_AUTO_REPLY", text)
-        self.assertIn('"reasoning_mode": "HERMES_AI_FIRST"', text)
-        self.assertIn('"factual_lookup": "ON_DEMAND"', text)
+        self.assertIn('"reasoning_mode": "HERMES_CONVERSATION_RUNTIME"', text)
+        self.assertIn('"factual_lookup": "ON_DEMAND_WITH_PRICE"', text)
+        self.assertIn('"HERMES_HOME": "/opt/data"', text)
         self.assertNotIn("safe_context_processor", text)
         self.assertNotIn("META_PAGE_ACCESS_TOKEN=", text)
 
-    def test_conversation_native_processor_uses_optional_tools_not_action_router(self):
-        text = self.read("ai_first_reply_processor.py")
+    def test_conversation_runtime_uses_optional_tools_and_grounded_fallbacks(self):
+        text = self.read("conversation_runtime_processor.py")
         self.assertIn("def build_conversation_prompt", text)
         self.assertIn("def call_conversation", text)
         self.assertIn("def split_natural_response", text)
         self.assertIn("def resolve_product_refs", text)
         self.assertIn("def retrieve_recommendation_candidates", text)
+        self.assertIn("def extract_budget_vnd", text)
         self.assertIn("THA_TOOL", text)
         self.assertIn("Không chuyển Thu Hà chỉ vì thiếu ngữ cảnh", text)
-        self.assertIn("Không dùng THA_TOOL cho câu chào", text)
+        self.assertIn("son môi khoảng 500 nghìn", text)
+        self.assertIn('env.setdefault("HERMES_HOME", HERMES_HOME)', text)
         self.assertIn('repo.update_status(row_number, "PROCESSING")', text)
-        self.assertNotIn("def build_plan_prompt", text)
-        self.assertNotIn("def call_plan", text)
         self.assertNotIn("ConversationPlan", text)
         self.assertNotIn("quick_product_reply(", text)
+        self.assertNotIn("nói thêm giúp em một chút về điều chị đang cần", text)
 
-    def test_legacy_natural_processor_remains_available_but_is_not_runtime_entrypoint(self):
-        text = self.read("natural_reply_processor.py")
-        self.assertIn('"PRODUCT_KEY"', text)
-        self.assertIn("call_hermes", text)
+    def test_legacy_processors_are_not_runtime_entrypoints(self):
         runner = self.read("run_fanpage_draft_background.ps1")
         bridge = self.read("meta_messenger_bridge.py")
+        self.assertNotIn("ai_first_reply_processor", runner)
+        self.assertNotIn('"integrations.hermes.ai_first_reply_processor"', bridge)
         self.assertNotIn("natural_reply_processor\n", runner)
         self.assertNotIn('"integrations.hermes.natural_reply_processor"', bridge)
 
-    def test_realtime_installer_restarts_bridge_and_keeps_fallback(self):
+    def test_realtime_installer_requires_live_runtime_smoke_and_fails_closed(self):
         text = self.read("install_realtime_fanpage_reply.ps1")
         self.assertIn("install_natural_cosmetics_agent.ps1", text)
         self.assertIn("docker restart $MetaContainerName", text)
         self.assertIn("REALTIME_NATURAL_AUTO_REPLY", text)
         self.assertIn("Hermes-ThuHa-Fanpage-Draft-Processor", text)
         self.assertIn("SCHEDULED_FALLBACK", text)
-        self.assertIn("HERMES_AI_FIRST", text)
-        self.assertIn("ON_DEMAND", text)
+        self.assertIn("HERMES_CONVERSATION_RUNTIME", text)
+        self.assertIn("ON_DEMAND_WITH_PRICE", text)
+        self.assertIn("HERMES_RUNTIME_SMOKE=PASS", text)
+        self.assertIn("Trả lời duy nhất một từ: OK", text)
+        self.assertIn("THA_REPLY_MODE' -Value 'DRAFT_ONLY", text)
+        self.assertIn("THA_META_AUTO_SEND' -Value 'false", text)
         self.assertNotIn("META_PAGE_ACCESS_TOKEN", text)
 
     def test_meta_sender_is_explicitly_gated_and_deduplicated_by_status(self):
@@ -86,6 +92,7 @@ class ProductionHardeningContractTests(unittest.TestCase):
     def test_windows_powershell_native_stderr_is_captured_without_false_failure(self):
         for name in (
             "install_natural_cosmetics_agent.ps1",
+            "install_realtime_fanpage_reply.ps1",
             "run_fanpage_draft_background.ps1",
             "configure_natural_meta_reply.ps1",
         ):
