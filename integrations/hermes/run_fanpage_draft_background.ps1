@@ -17,6 +17,30 @@ function Write-HostLog {
     Write-Host $line
 }
 
+function Invoke-NativeCapture {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    $previousPreference = $ErrorActionPreference
+    $output = @()
+    $exitCode = 1
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $FilePath @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    return [pscustomobject]@{
+        Output = $output
+        ExitCode = $exitCode
+    }
+}
+
 try {
     New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
 
@@ -63,17 +87,18 @@ python -m integrations.hermes.meta_outbound_sender
 '@ -replace "`r`n", "`n"
 
     Write-HostLog "START container=$ContainerName processor=NATURAL_SKILL_DRIVEN"
-    $output = & docker exec $ContainerName /bin/sh -c $shellCommand 2>&1
-    $exitCode = $LASTEXITCODE
+    $result = Invoke-NativeCapture -FilePath 'docker' -Arguments @(
+        'exec', $ContainerName, '/bin/sh', '-c', $shellCommand
+    )
 
-    foreach ($line in $output) {
+    foreach ($line in $result.Output) {
         if ($null -ne $line -and "$line".Trim()) {
             Write-HostLog ("RUNTIME " + "$line")
         }
     }
 
-    if ($exitCode -ne 0) {
-        throw "Natural reply pipeline exited with code $exitCode"
+    if ($result.ExitCode -ne 0) {
+        throw "Natural reply pipeline exited with code $($result.ExitCode)"
     }
 
     Write-HostLog "PASS Natural reply pipeline completed"
