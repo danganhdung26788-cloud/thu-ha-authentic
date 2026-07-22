@@ -2,6 +2,7 @@ param(
     [string]$PublicBaseUrl = '',
     [string]$DataRoot = 'D:\HermesAgent\data',
     [string]$ContainerName = 'hermes-tha-meta',
+    [string]$GatewayContainer = 'hermes-gateway',
     [string]$Image = 'nousresearch/hermes-agent:latest',
     [int]$HostPort = 8788
 )
@@ -45,7 +46,6 @@ $lines = if (Test-Path $envPath) { [System.IO.File]::ReadAllLines($envPath) } el
 $managed = @{
     META_VERIFY_TOKEN = $verifyToken
     HERMES_HOME = '/opt/data'
-    THA_HERMES_BIN = '/opt/hermes/.venv/bin/hermes'
 }
 foreach ($key in $managed.Keys) {
     $updated = $false
@@ -74,6 +74,7 @@ if (Get-Command Set-Clipboard -ErrorAction SilentlyContinue) {
     -File $sidecarScript `
     -DataRoot $DataRoot `
     -ContainerName $ContainerName `
+    -GatewayContainer $GatewayContainer `
     -Image $Image `
     -HostPort $HostPort `
     -LocalHealthUrl "http://127.0.0.1:${HostPort}/health"
@@ -90,6 +91,12 @@ docker exec $ContainerName /bin/sh -c 'test -n "$META_VERIFY_TOKEN"'
 if ($LASTEXITCODE -ne 0) {
     throw 'META_VERIFY_TOKEN is still unavailable inside the container.'
 }
+
+$resolvedHermesBin = docker exec $ContainerName /bin/sh -c 'printf "%s" "$THA_HERMES_BIN"'
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($resolvedHermesBin | Out-String).Trim())) {
+    throw 'THA_HERMES_BIN is unavailable inside the Meta sidecar.'
+}
+$resolvedHermesBin = ($resolvedHermesBin | Out-String).Trim()
 
 $verifyStatus = 'SKIPPED'
 $challengeMatch = 'SKIPPED'
@@ -108,7 +115,7 @@ Write-Output "TOKEN_FILE=$tokenFile"
 Write-Output "TOKEN_COPIED_TO_CLIPBOARD=$clipboardCopied"
 Write-Output 'META_SIDECAR_ONLY=TRUE'
 Write-Output 'DUPLICATE_TELEGRAM_POLLING=DISABLED'
-Write-Output 'HERMES_BIN=/opt/hermes/.venv/bin/hermes'
+Write-Output "HERMES_BIN=$resolvedHermesBin"
 Write-Output "HEALTH_STATUS=$($health.status)"
 Write-Output "VERIFY_HTTP_STATUS=$verifyStatus"
 Write-Output "VERIFY_CHALLENGE_MATCH=$challengeMatch"

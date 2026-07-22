@@ -1,6 +1,7 @@
 param(
     [string]$Container = 'hermes-gateway',
-    [string]$HermesData = 'D:\HermesAgent\data'
+    [string]$HermesData = 'D:\HermesAgent\data',
+    [string]$HermesBin = ''
 )
 
 Set-StrictMode -Version Latest
@@ -52,6 +53,22 @@ function Invoke-NativeCapture {
     }
 }
 
+function Resolve-ContainerCommandPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$ContainerName,
+        [Parameter(Mandatory = $true)][string]$Command
+    )
+
+    $result = Invoke-NativeCapture -FilePath 'docker' -Arguments @(
+        'exec', $ContainerName, '/bin/sh', '-c', "command -v $Command"
+    )
+    $path = @($result.Output | ForEach-Object { "$($_)".Trim() } | Where-Object { $_ }) | Select-Object -First 1
+    if ($result.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($path)) {
+        throw "Could not resolve '$Command' inside container '$ContainerName'."
+    }
+    return $path
+}
+
 function Update-ManagedSection {
     param(
         [string]$TargetPath,
@@ -91,6 +108,10 @@ foreach ($required in @($SourceIntegrations, $SourceSkill, $MemorySectionPath, $
 $running = docker inspect -f '{{.State.Running}}' $Container 2>$null
 if ($LASTEXITCODE -ne 0 -or ($running | Out-String).Trim().ToLowerInvariant() -ne 'true') {
     throw "Container is not running: $Container"
+}
+
+if ([string]::IsNullOrWhiteSpace($HermesBin)) {
+    $HermesBin = Resolve-ContainerCommandPath -ContainerName $Container -Command 'hermes'
 }
 
 foreach ($directory in @(
@@ -139,7 +160,7 @@ if [ -f /opt/data/.env ]; then
   set +a
 fi
 export HERMES_HOME="${HERMES_HOME:-/opt/data}"
-export THA_HERMES_BIN="${THA_HERMES_BIN:-/opt/hermes/.venv/bin/hermes}"
+export THA_HERMES_BIN="$THA_RESOLVED_HERMES_BIN"
 export GOOGLE_APPLICATION_CREDENTIALS=/opt/data/google/application_default_credentials.json
 export PYTHONPATH=/opt/data/tha-integrations:/opt/data/tha-integrations/.vendor
 cd /opt/data/tha-integrations
@@ -156,7 +177,7 @@ python -m integrations.hermes.meta_outbound_sender
 '@ -replace "`r`n", "`n"
 
 $result = Invoke-NativeCapture -FilePath 'docker' -Arguments @(
-    'exec', $Container, '/bin/sh', '-c', $verifyScript
+    'exec', '-e', "THA_RESOLVED_HERMES_BIN=$HermesBin", $Container, '/bin/sh', '-c', $verifyScript
 )
 $result.Output | ForEach-Object { Write-Host $_ }
 if ($result.ExitCode -ne 0) {
@@ -172,6 +193,6 @@ Write-Host 'PROCESSOR=HERMES_CONVERSATION_RUNTIME'
 Write-Host 'REASONING_MODE=NATURAL_CONVERSATION'
 Write-Host 'FACTUAL_LOOKUP=ON_DEMAND_WITH_PRICE'
 Write-Host 'HERMES_HOME=/opt/data'
-Write-Host 'HERMES_BIN=/opt/hermes/.venv/bin/hermes'
+Write-Host "HERMES_BIN=$HermesBin"
 Write-Host 'GENERIC_FALLBACK_LOOP=DISABLED'
 Write-Host 'AUTO_SEND=UNCHANGED'

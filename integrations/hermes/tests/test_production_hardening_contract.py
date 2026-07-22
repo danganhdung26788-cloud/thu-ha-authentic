@@ -59,22 +59,29 @@ class ProductionHardeningContractTests(unittest.TestCase):
         self.assertNotIn("natural_reply_processor\n", runner)
         self.assertNotIn('"integrations.hermes.natural_reply_processor"', bridge)
 
-    def test_meta_sidecar_bypasses_s6_gateway_and_telegram(self):
+    def test_meta_sidecar_bypasses_s6_gateway_and_resolves_runtime_paths(self):
         text = self.read("recreate_meta_bridge_sidecar.ps1")
         self.assertIn("--entrypoint /bin/sh", text)
         self.assertIn("--user '10000:10000'", text)
-        self.assertIn("/opt/hermes/.venv/bin/python -m uvicorn", text)
-        self.assertIn("THA_HERMES_BIN=/opt/hermes/.venv/bin/hermes", text)
+        self.assertIn("Resolve-ContainerCommandPath", text)
+        self.assertIn("command -v $Command", text)
+        self.assertIn("-Command 'hermes'", text)
+        self.assertIn("-Command 'python'", text)
+        self.assertIn('exec "$THA_PYTHON_BIN" -m uvicorn', text)
         self.assertIn("META_SIDECAR_ONLY=TRUE", text)
         self.assertIn("DUPLICATE_HERMES_GATEWAY=DISABLED", text)
         self.assertIn("DUPLICATE_TELEGRAM_POLLING=DISABLED", text)
         self.assertNotIn("gateway run", text)
         self.assertNotIn("TELEGRAM_BOT_TOKEN=", text)
+        self.assertNotIn("/opt/hermes/.venv/bin/hermes", text)
 
-    def test_realtime_installer_requires_absolute_binary_and_live_smoke(self):
+    def test_realtime_installer_resolves_binary_and_requires_live_smoke(self):
         text = self.read("install_realtime_fanpage_reply.ps1")
         self.assertIn("install_natural_cosmetics_agent.ps1", text)
         self.assertIn("recreate_meta_bridge_sidecar.ps1", text)
+        self.assertIn("Resolve-ContainerCommandPath", text)
+        self.assertIn("-Command 'hermes'", text)
+        self.assertIn("-Command 'python'", text)
         self.assertIn("REALTIME_NATURAL_AUTO_REPLY", text)
         self.assertIn("Hermes-ThuHa-Fanpage-Draft-Processor", text)
         self.assertIn("SCHEDULED_FALLBACK", text)
@@ -82,26 +89,32 @@ class ProductionHardeningContractTests(unittest.TestCase):
         self.assertIn("ON_DEMAND_WITH_PRICE", text)
         self.assertIn("HERMES_RUNTIME_SMOKE=PASS", text)
         self.assertIn("Trả lời duy nhất một từ: OK", text)
-        self.assertIn("/opt/hermes/.venv/bin/hermes", text)
+        self.assertIn("THA_RESOLVED_HERMES_BIN", text)
         self.assertIn("THA_REPLY_MODE' -Value 'DRAFT_ONLY", text)
         self.assertIn("THA_META_AUTO_SEND' -Value 'false", text)
         self.assertIn("META_SIDECAR_ONLY=TRUE", text)
         self.assertNotIn("META_PAGE_ACCESS_TOKEN", text)
+        self.assertNotIn("/opt/hermes/.venv/bin/hermes", text)
 
     def test_meta_token_bootstrap_uses_sidecar_without_printing_secret(self):
         text = self.read("setup_meta_verify_token.ps1")
         self.assertIn("recreate_meta_bridge_sidecar.ps1", text)
+        self.assertIn("GatewayContainer", text)
         self.assertIn("TOKEN_PRINTED=FALSE", text)
         self.assertIn("META_SIDECAR_ONLY=TRUE", text)
         self.assertIn("DUPLICATE_TELEGRAM_POLLING=DISABLED", text)
-        self.assertIn("/opt/hermes/.venv/bin/hermes", text)
+        self.assertIn("THA_HERMES_BIN", text)
         self.assertNotIn("Write-Output $verifyToken", text)
+        self.assertNotIn("/opt/hermes/.venv/bin/hermes", text)
 
-    def test_native_installer_uses_absolute_hermes_binary(self):
+    def test_native_installer_resolves_hermes_binary_without_login_shell(self):
         text = self.read("install_natural_cosmetics_agent.ps1")
-        self.assertIn('THA_HERMES_BIN="${THA_HERMES_BIN:-/opt/hermes/.venv/bin/hermes}"', text)
+        self.assertIn("Resolve-ContainerCommandPath", text)
+        self.assertIn("command -v $Command", text)
+        self.assertIn("THA_RESOLVED_HERMES_BIN", text)
         self.assertIn('"$THA_HERMES_BIN" skills list', text)
-        self.assertIn("HERMES_BIN=/opt/hermes/.venv/bin/hermes", text)
+        self.assertNotIn("/bin/sh', '-lc'", text)
+        self.assertNotIn("/opt/hermes/.venv/bin/hermes", text)
 
     def test_meta_sender_is_explicitly_gated_and_deduplicated_by_status(self):
         text = self.read("meta_outbound_sender.py")
