@@ -1,6 +1,6 @@
 """Send prepared Thu Hà Authentic replies through Meta Messenger Send API.
 
-No confidence threshold is imposed. Any DRAFT_READY row may be sent when the
+No confidence threshold is imposed. Any new DRAFT_READY row may be sent when the
 operator explicitly enables NATURAL_AUTO_REPLY. NEED_HUMAN remains an internal
 handoff signal and does not prevent a brief handoff response from being sent.
 """
@@ -24,12 +24,33 @@ PAGE_ACCESS_TOKEN = os.getenv("META_PAGE_ACCESS_TOKEN", "").strip()
 GRAPH_VERSION = os.getenv("META_GRAPH_API_VERSION", "v25.0").strip()
 REPLY_MODE = os.getenv("THA_REPLY_MODE", "DRAFT_ONLY").strip().upper()
 AUTO_SEND = os.getenv("THA_META_AUTO_SEND", "false").strip().lower() == "true"
+AUTO_SEND_SINCE = os.getenv("THA_META_AUTO_SEND_SINCE", "").strip()
 MAX_ITEMS = max(1, min(int(os.getenv("THA_META_SEND_MAX_ITEMS", "10")), 50))
 REQUEST_TIMEOUT = max(5, min(int(os.getenv("THA_META_SEND_TIMEOUT_SECONDS", "30")), 120))
 
 
 class MetaSendError(RuntimeError):
     pass
+
+
+def parse_timestamp(value: str) -> datetime | None:
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def created_after_cutoff(row: dict[str, str], cutoff: datetime | None) -> bool:
+    if cutoff is None:
+        return True
+    created = parse_timestamp(str(row.get("CREATED_AT", "")))
+    return created is not None and created >= cutoff
 
 
 class MetaClient:
@@ -139,10 +160,16 @@ class SheetsRepository:
         ).execute()
 
 
-def send_ready_messages(repo: SheetsRepository, client: MetaClient) -> tuple[int, int, int]:
+def send_ready_messages(
+    repo: SheetsRepository,
+    client: MetaClient,
+    cutoff: datetime | None = None,
+) -> tuple[int, int, int]:
     eligible = sent = failed = 0
     for row_number, row in enumerate(repo.read_queue(), start=2):
         if str(row.get("STATUS", "")).strip().upper() != "DRAFT_READY":
+            continue
+        if not created_after_cutoff(row, cutoff):
             continue
         eligible += 1
         recipient_id = str(row.get("CUSTOMER_ID", "")).strip()
@@ -186,8 +213,9 @@ def main() -> int:
         )
         return 0
 
+    cutoff = parse_timestamp(AUTO_SEND_SINCE)
     repo = SheetsRepository(FAST_INDEX_ID)
-    eligible, sent, failed = send_ready_messages(repo, client)
+    eligible, sent, failed = send_ready_messages(repo, client, cutoff=cutoff)
     print(
         "PASS Meta outbound sender "
         f"eligible={eligible} sent={sent} failed={failed} mode={REPLY_MODE}"
