@@ -32,17 +32,20 @@ class ProductionHardeningContractTests(unittest.TestCase):
         self.assertNotIn("safe_context_processor", text)
         self.assertNotIn("META_PAGE_ACCESS_TOKEN=", text)
 
-    def test_ai_first_processor_reasons_before_catalog_lookup(self):
+    def test_conversation_native_processor_uses_optional_tools_not_action_router(self):
         text = self.read("ai_first_reply_processor.py")
-        self.assertIn("def build_plan_prompt", text)
-        self.assertIn("def call_plan", text)
+        self.assertIn("def build_conversation_prompt", text)
+        self.assertIn("def call_conversation", text)
+        self.assertIn("def split_natural_response", text)
         self.assertIn("def resolve_product_refs", text)
         self.assertIn("def retrieve_recommendation_candidates", text)
-        self.assertIn("def build_lookup_reply_prompt", text)
-        self.assertIn("Suy luan theo mach hoi thoai truoc", text)
-        self.assertIn("KHONG co nghia la tim mot san pham moi", text)
-        self.assertIn("Generic words and product attributes never select a catalog row", text)
+        self.assertIn("THA_TOOL", text)
+        self.assertIn("Không chuyển Thu Hà chỉ vì thiếu ngữ cảnh", text)
+        self.assertIn("Không dùng THA_TOOL cho câu chào", text)
         self.assertIn('repo.update_status(row_number, "PROCESSING")', text)
+        self.assertNotIn("def build_plan_prompt", text)
+        self.assertNotIn("def call_plan", text)
+        self.assertNotIn("ConversationPlan", text)
         self.assertNotIn("quick_product_reply(", text)
 
     def test_legacy_natural_processor_remains_available_but_is_not_runtime_entrypoint(self):
