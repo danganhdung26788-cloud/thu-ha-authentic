@@ -24,7 +24,7 @@ try {
         throw "Container is not running: $ContainerName"
     }
 
-    $shellCommand = @"
+    $shellCommand = @'
 set -eu
 if [ -f /opt/data/.env ]; then
   set -a
@@ -34,13 +34,18 @@ fi
 export GOOGLE_APPLICATION_CREDENTIALS=/opt/data/google/application_default_credentials.json
 export PYTHONPATH=/opt/data/tha-integrations:/opt/data/tha-integrations/.vendor
 python -m integrations.hermes.cosmetics_training_store \
-  --message-id '$($MessageId.Replace("'", "'\"'\"'"))' \
-  --corrected-reply-file '$ContainerInputPath' \
-  --reason '$($Reason.Replace("'", "'\"'\"'"))' \
-  --trainer '$Trainer'
-"@ -replace "`r`n", "`n"
+  --message-id "$THA_TRAIN_MESSAGE_ID" \
+  --corrected-reply-file "$THA_TRAIN_REPLY_FILE" \
+  --reason "$THA_TRAIN_REASON" \
+  --trainer "$THA_TRAINER"
+'@ -replace "`r`n", "`n"
 
-    $output = docker exec $ContainerName /bin/sh -c $shellCommand 2>&1
+    $output = docker exec `
+        -e "THA_TRAIN_MESSAGE_ID=$MessageId" `
+        -e "THA_TRAIN_REPLY_FILE=$ContainerInputPath" `
+        -e "THA_TRAIN_REASON=$Reason" `
+        -e "THA_TRAINER=$Trainer" `
+        $ContainerName /bin/sh -c $shellCommand 2>&1
     $exitCode = $LASTEXITCODE
     $output | ForEach-Object { Write-Host $_ }
     if ($exitCode -ne 0) {
