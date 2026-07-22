@@ -51,13 +51,14 @@ class MetaOutboundSenderTests(unittest.TestCase):
     def test_verify_page_token_rejects_wrong_identity_with_clear_ids(self):
         session = Mock()
         session.get.return_value = FakeResponse(200, {"id": "other-page", "name": "Other Page"})
-        client = MetaClient("page-1", "token", session=session)
+        secret = "super-secret-token-value"
+        client = MetaClient("page-1", secret, session=session)
         with self.assertRaises(MetaSendError) as context:
             client.verify_page()
         message = str(context.exception)
         self.assertIn("expected_page_id=page-1", message)
         self.assertIn("actual_id=other-page", message)
-        self.assertNotIn("token", message.lower())
+        self.assertNotIn(secret, message)
 
     def test_send_text_uses_response_message_type(self):
         session = Mock()
