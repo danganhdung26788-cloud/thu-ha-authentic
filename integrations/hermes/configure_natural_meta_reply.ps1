@@ -11,13 +11,24 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
+function Normalize-EnvLine {
+    param([string]$Line)
+    if ($null -eq $Line) {
+        return ''
+    }
+    return $Line.TrimStart([char]0xFEFF)
+}
+
 function Set-EnvValue {
     param(
         [string[]]$Lines,
         [string]$Key,
         [string]$Value
     )
-    $filtered = @($Lines | Where-Object { $_ -notmatch ('^' + [regex]::Escape($Key) + '=') })
+    $prefixPattern = '^' + [regex]::Escape($Key) + '='
+    $filtered = @($Lines | Where-Object {
+        (Normalize-EnvLine -Line $_) -notmatch $prefixPattern
+    })
     $filtered += "$Key=$Value"
     return ,$filtered
 }
@@ -28,11 +39,17 @@ function Get-EnvValue {
         [string]$Key
     )
     $prefix = "$Key="
-    $line = @($Lines | Where-Object { $_.StartsWith($prefix, [System.StringComparison]::Ordinal) } | Select-Object -Last 1)
-    if ($line.Count -eq 0) {
+    $value = $null
+    foreach ($rawLine in @($Lines)) {
+        $line = Normalize-EnvLine -Line $rawLine
+        if ($line.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+            $value = $line.Substring($prefix.Length)
+        }
+    }
+    if ($null -eq $value) {
         return ''
     }
-    return $line[0].Substring($prefix.Length)
+    return $value
 }
 
 function Invoke-NativeCapture {
@@ -85,18 +102,33 @@ if ($Action -eq 'Disable') {
 $secureToken = $null
 $bstr = [IntPtr]::Zero
 $plainToken = $null
+$tokenSource = $null
 try {
     if ($UseExistingToken) {
         $plainToken = Get-EnvValue -Lines $lines -Key 'META_PAGE_ACCESS_TOKEN'
-        if ([string]::IsNullOrWhiteSpace($plainToken)) {
-            throw 'META_PAGE_ACCESS_TOKEN_NOT_FOUND_IN_ENV'
+        if (-not [string]::IsNullOrWhiteSpace($plainToken)) {
+            $tokenSource = 'LOCAL_ENV_FILE'
         }
-        Write-Host 'META_PAGE_ACCESS_TOKEN=USING_EXISTING_LOCAL_VALUE'
+        else {
+            $tokenResult = Invoke-NativeCapture -FilePath 'docker' -Arguments @(
+                'exec', $ContainerName, '/bin/sh', '-c', 'printf %s "${META_PAGE_ACCESS_TOKEN:-}"'
+            )
+            if ($tokenResult.ExitCode -ne 0) {
+                throw 'META_PAGE_ACCESS_TOKEN_CONTAINER_READ_FAILED'
+            }
+            $plainToken = (($tokenResult.Output | ForEach-Object { "$_" }) -join '').Trim()
+            if ([string]::IsNullOrWhiteSpace($plainToken)) {
+                throw 'META_PAGE_ACCESS_TOKEN_NOT_FOUND_IN_ENV_OR_CONTAINER'
+            }
+            $tokenSource = 'RUNNING_CONTAINER_ENV'
+        }
+        Write-Host "META_PAGE_ACCESS_TOKEN=USING_EXISTING_$tokenSource"
     }
     else {
         $secureToken = Read-Host 'Dan Page Access Token cua Fanpage Thu Ha Authentic roi nhan Enter' -AsSecureString
         $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
         $plainToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+        $tokenSource = 'SECURE_PROMPT'
     }
 
     if ([string]::IsNullOrWhiteSpace($plainToken)) {
@@ -131,6 +163,7 @@ python -m integrations.hermes.meta_outbound_sender --verify-token
     }
 
     Write-Host 'PASS: Natural Meta reply enabled'
+    Write-Host "TOKEN_SOURCE=$tokenSource"
     Write-Host 'THA_REPLY_MODE=NATURAL_AUTO_REPLY'
     Write-Host 'THA_META_AUTO_SEND=true'
     Write-Host "THA_META_AUTO_SEND_SINCE=$activationTime"
@@ -142,4 +175,5 @@ finally {
     }
     $plainToken = $null
     $secureToken = $null
+    $tokenSource = $null
 }
