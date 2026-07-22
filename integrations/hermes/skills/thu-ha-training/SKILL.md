@@ -16,6 +16,7 @@ metadata:
 ## Khi sử dụng
 Chỉ dùng trong topic Telegram dành riêng cho training của **Đặng Anh Dũng** hoặc **Nông Thu Hà**.
 Không dùng skill này trong hội thoại với khách hàng.
+Mở chế độ training trong topic bằng lệnh **`/thu-ha-training`**.
 
 ## Mục tiêu
 Biến bản sửa của người quản lý thành quy tắc đang có hiệu lực ngay từ lượt tư vấn tiếp theo, không phải sửa code cho từng lỗi.
