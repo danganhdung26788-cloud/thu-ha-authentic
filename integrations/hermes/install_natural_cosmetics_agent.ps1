@@ -28,6 +28,33 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($Path, $normalized, $Utf8NoBom)
 }
 
+function Invoke-NativeCapture {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    $previousPreference = $ErrorActionPreference
+    $output = @()
+    $exitCode = 1
+    try {
+        # Windows PowerShell 5 converts native stderr into NativeCommandError when
+        # ErrorActionPreference=Stop. unittest -v writes normal progress to stderr,
+        # so capture it without turning successful native execution into an exception.
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $FilePath @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    return [pscustomobject]@{
+        Output = $output
+        ExitCode = $exitCode
+    }
+}
+
 function Update-ManagedSection {
     param(
         [string]$TargetPath,
@@ -126,11 +153,12 @@ THA_NATURAL_REPLY_DRY_RUN=true python -m integrations.hermes.natural_reply_proce
 python -m integrations.hermes.meta_outbound_sender
 '@ -replace "`r`n", "`n"
 
-$output = docker exec $Container /bin/sh -c $verifyScript 2>&1
-$exitCode = $LASTEXITCODE
-$output | ForEach-Object { Write-Host $_ }
-if ($exitCode -ne 0) {
-    throw "Natural cosmetics agent verification failed with exit code $exitCode"
+$result = Invoke-NativeCapture -FilePath 'docker' -Arguments @(
+    'exec', $Container, '/bin/sh', '-c', $verifyScript
+)
+$result.Output | ForEach-Object { Write-Host $_ }
+if ($result.ExitCode -ne 0) {
+    throw "Natural cosmetics agent verification failed with exit code $($result.ExitCode)"
 }
 
 Write-Host 'PASS: Thu Ha cosmetics native skill installed'
