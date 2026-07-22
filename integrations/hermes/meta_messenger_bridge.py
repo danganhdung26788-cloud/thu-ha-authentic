@@ -1,8 +1,8 @@
 """Direct Meta Messenger webhook adapter for Thu Ha Authentic.
 
-Verified text messages are written to FANPAGE_QUEUE. The bridge then starts the
-Hermes AI-first conversation processor and Meta sender immediately in a serialized
-background worker. The Windows Scheduled Task remains a fallback.
+Verified text messages are written to FANPAGE_QUEUE. The bridge starts the reliable
+Hermes conversation runtime and Meta sender immediately in one serialized worker.
+The Windows Scheduled Task remains a fallback.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from google.auth import default as google_auth_default
 from googleapiclient.discovery import build
 
 LOGGER = logging.getLogger("tha_meta_messenger_bridge")
-app = FastAPI(title="Thu Ha Authentic Meta Messenger Bridge", version="1.3.0")
+app = FastAPI(title="Thu Ha Authentic Meta Messenger Bridge", version="1.4.0")
 
 
 def now_iso() -> str:
@@ -124,13 +124,32 @@ DEDUPE = DedupeStore(STATE_DB)
 PIPELINE_LOCK = threading.Lock()
 
 
+def _apply_runtime_defaults(loaded: dict[str, str]) -> dict[str, str]:
+    defaults = {
+        "HERMES_HOME": "/opt/data",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/opt/data/google/application_default_credentials.json",
+    }
+    for key, value in defaults.items():
+        if not loaded.get(key):
+            loaded[key] = value
+        os.environ[key] = loaded[key]
+
+    required_pythonpath = "/opt/data/tha-integrations:/opt/data/tha-integrations/.vendor"
+    current = loaded.get("PYTHONPATH", os.environ.get("PYTHONPATH", ""))
+    if required_pythonpath not in current:
+        current = required_pythonpath if not current else f"{required_pythonpath}:{current}"
+    loaded["PYTHONPATH"] = current
+    os.environ["PYTHONPATH"] = current
+    return loaded
+
+
 def load_runtime_env(path: Path = ENV_PATH) -> dict[str, str]:
-    """Load current persistent runtime settings without printing secret values."""
+    """Load persistent settings and guarantee the same Hermes home as the gateway."""
     loaded: dict[str, str] = {}
     try:
         lines = path.read_text(encoding="utf-8-sig").splitlines()
     except (FileNotFoundError, OSError, UnicodeError):
-        return loaded
+        return _apply_runtime_defaults(loaded)
     for raw_line in lines:
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -147,23 +166,23 @@ def load_runtime_env(path: Path = ENV_PATH) -> dict[str, str]:
         if key:
             loaded[key] = value
             os.environ[key] = value
-    return loaded
+    return _apply_runtime_defaults(loaded)
 
 
 def run_realtime_pipeline() -> None:
-    """Let Hermes reason first, retrieve facts on demand, then send."""
+    """Run real Hermes conversation, retrieve verified facts on demand, then send."""
     with PIPELINE_LOCK:
         load_runtime_env()
         os.environ["THA_AI_FIRST_DRY_RUN"] = "false"
 
         processor = importlib.import_module(
-            "integrations.hermes.ai_first_reply_processor"
+            "integrations.hermes.conversation_runtime_processor"
         )
         processor = importlib.reload(processor)
         processor_repo = processor.SheetsRepository(processor.FAST_INDEX_ID)
         eligible, processed, fallbacks = processor.process_new_messages(processor_repo)
         LOGGER.info(
-            "Realtime Hermes AI-first eligible=%s processed=%s fallbacks=%s",
+            "Realtime Hermes conversation runtime eligible=%s processed=%s fallbacks=%s",
             eligible,
             processed,
             fallbacks,
@@ -289,8 +308,9 @@ def health() -> dict[str, str]:
         "status": "ok",
         "mode": "REALTIME_NATURAL_AUTO_REPLY" if active else "DRAFT_ONLY_INGEST",
         "scheduled_fallback": "enabled",
-        "reasoning_mode": "HERMES_AI_FIRST",
-        "factual_lookup": "ON_DEMAND",
+        "reasoning_mode": "HERMES_CONVERSATION_RUNTIME",
+        "factual_lookup": "ON_DEMAND_WITH_PRICE",
         "context_guard": "validation_only",
+        "hermes_home": runtime.get("HERMES_HOME", "/opt/data"),
         "fanpage_queue_id": FAST_INDEX_ID,
     }
