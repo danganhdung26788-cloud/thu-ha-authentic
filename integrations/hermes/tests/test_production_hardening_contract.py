@@ -8,31 +8,51 @@ class ProductionHardeningContractTests(unittest.TestCase):
     def read(self, name: str) -> str:
         return (ROOT / name).read_text(encoding="utf-8")
 
-    def test_fanpage_background_runner_is_locked_and_uses_natural_pipeline(self):
+    def test_fanpage_background_runner_is_locked_and_uses_ai_first_pipeline(self):
         text = self.read("run_fanpage_draft_background.ps1")
-        self.assertIn("Global\\HermesThuHaFanpageDraftProcessor", text)
-        self.assertIn("THA_NATURAL_REPLY_DRY_RUN=false", text)
-        self.assertIn("natural_reply_processor", text)
+        self.assertIn("Global\HermesThuHaFanpageDraftProcessor", text)
+        self.assertIn("THA_AI_FIRST_DRY_RUN=false", text)
+        self.assertIn("ai_first_reply_processor", text)
         self.assertIn("meta_outbound_sender", text)
+        self.assertNotIn("python -m integrations.hermes.safe_context_processor", text)
+        self.assertNotIn("python -m integrations.hermes.natural_reply_processor", text)
         self.assertNotIn("graph.facebook.com", text)
 
     def test_meta_bridge_runs_realtime_pipeline_with_scheduled_fallback(self):
         text = self.read("meta_messenger_bridge.py")
         self.assertIn("def run_realtime_pipeline", text)
         self.assertIn("PIPELINE_LOCK", text)
+        self.assertIn("ai_first_reply_processor", text)
         self.assertIn("processor.process_new_messages", text)
         self.assertIn("sender.send_ready_messages", text)
         self.assertIn("Scheduled Task will retry queued messages", text)
         self.assertIn("REALTIME_NATURAL_AUTO_REPLY", text)
+        self.assertIn('"reasoning_mode": "HERMES_AI_FIRST"', text)
+        self.assertIn('"factual_lookup": "ON_DEMAND"', text)
+        self.assertNotIn("safe_context_processor", text)
         self.assertNotIn("META_PAGE_ACCESS_TOKEN=", text)
 
-    def test_context_processor_preserves_product_and_has_fast_path(self):
+    def test_ai_first_processor_reasons_before_catalog_lookup(self):
+        text = self.read("ai_first_reply_processor.py")
+        self.assertIn("def build_plan_prompt", text)
+        self.assertIn("def call_plan", text)
+        self.assertIn("def resolve_product_refs", text)
+        self.assertIn("def retrieve_recommendation_candidates", text)
+        self.assertIn("def build_lookup_reply_prompt", text)
+        self.assertIn("Suy luan theo mach hoi thoai truoc", text)
+        self.assertIn("KHONG co nghia la tim mot san pham moi", text)
+        self.assertIn("Generic words and product attributes never select a catalog row", text)
+        self.assertIn('repo.update_status(row_number, "PROCESSING")', text)
+        self.assertNotIn("quick_product_reply(", text)
+
+    def test_legacy_natural_processor_remains_available_but_is_not_runtime_entrypoint(self):
         text = self.read("natural_reply_processor.py")
         self.assertIn('"PRODUCT_KEY"', text)
-        self.assertIn("resolve_context_product", text)
-        self.assertIn("quick_product_reply", text)
-        self.assertIn("Không hỏi lại tên sản phẩm", text)
-        self.assertIn('repo.update_status(row_number, "PROCESSING")', text)
+        self.assertIn("call_hermes", text)
+        runner = self.read("run_fanpage_draft_background.ps1")
+        bridge = self.read("meta_messenger_bridge.py")
+        self.assertNotIn("natural_reply_processor\n", runner)
+        self.assertNotIn('"integrations.hermes.natural_reply_processor"', bridge)
 
     def test_realtime_installer_restarts_bridge_and_keeps_fallback(self):
         text = self.read("install_realtime_fanpage_reply.ps1")
@@ -41,6 +61,8 @@ class ProductionHardeningContractTests(unittest.TestCase):
         self.assertIn("REALTIME_NATURAL_AUTO_REPLY", text)
         self.assertIn("Hermes-ThuHa-Fanpage-Draft-Processor", text)
         self.assertIn("SCHEDULED_FALLBACK", text)
+        self.assertIn("HERMES_AI_FIRST", text)
+        self.assertIn("ON_DEMAND", text)
         self.assertNotIn("META_PAGE_ACCESS_TOKEN", text)
 
     def test_meta_sender_is_explicitly_gated_and_deduplicated_by_status(self):
