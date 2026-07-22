@@ -31,6 +31,20 @@ class ProductionHardeningContractTests(unittest.TestCase):
         self.assertIn("LogonType Interactive", text)
         self.assertIn("AUTO_SEND=FALSE", text)
 
+    def test_windows_powershell_native_stderr_is_captured_without_false_failure(self):
+        for name in (
+            "install_natural_cosmetics_agent.ps1",
+            "run_fanpage_draft_background.ps1",
+            "configure_natural_meta_reply.ps1",
+        ):
+            text = self.read(name)
+            self.assertIn("function Invoke-NativeCapture", text)
+            self.assertIn("$ErrorActionPreference = 'Continue'", text)
+            self.assertIn("ExitCode = $exitCode", text)
+        configure = self.read("configure_natural_meta_reply.ps1")
+        self.assertIn("[switch]$UseExistingToken", configure)
+        self.assertIn("USING_EXISTING_LOCAL_VALUE", configure)
+
     def test_named_tunnel_uses_token_file_not_cli_token(self):
         text = self.read("install_meta_named_tunnel.ps1")
         self.assertIn("--token-file /run/secrets/tunnel-token", text)
