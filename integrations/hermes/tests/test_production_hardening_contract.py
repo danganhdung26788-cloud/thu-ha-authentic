@@ -16,6 +16,33 @@ class ProductionHardeningContractTests(unittest.TestCase):
         self.assertIn("meta_outbound_sender", text)
         self.assertNotIn("graph.facebook.com", text)
 
+    def test_meta_bridge_runs_realtime_pipeline_with_scheduled_fallback(self):
+        text = self.read("meta_messenger_bridge.py")
+        self.assertIn("def run_realtime_pipeline", text)
+        self.assertIn("PIPELINE_LOCK", text)
+        self.assertIn("processor.process_new_messages", text)
+        self.assertIn("sender.send_ready_messages", text)
+        self.assertIn("Scheduled Task will retry queued messages", text)
+        self.assertIn("REALTIME_NATURAL_AUTO_REPLY", text)
+        self.assertNotIn("META_PAGE_ACCESS_TOKEN=", text)
+
+    def test_context_processor_preserves_product_and_has_fast_path(self):
+        text = self.read("natural_reply_processor.py")
+        self.assertIn('"PRODUCT_KEY"', text)
+        self.assertIn("resolve_context_product", text)
+        self.assertIn("quick_product_reply", text)
+        self.assertIn("Không hỏi lại tên sản phẩm", text)
+        self.assertIn('repo.update_status(row_number, "PROCESSING")', text)
+
+    def test_realtime_installer_restarts_bridge_and_keeps_fallback(self):
+        text = self.read("install_realtime_fanpage_reply.ps1")
+        self.assertIn("install_natural_cosmetics_agent.ps1", text)
+        self.assertIn("docker restart $MetaContainerName", text)
+        self.assertIn("REALTIME_NATURAL_AUTO_REPLY", text)
+        self.assertIn("Hermes-ThuHa-Fanpage-Draft-Processor", text)
+        self.assertIn("SCHEDULED_FALLBACK", text)
+        self.assertNotIn("META_PAGE_ACCESS_TOKEN", text)
+
     def test_meta_sender_is_explicitly_gated_and_deduplicated_by_status(self):
         text = self.read("meta_outbound_sender.py")
         self.assertIn('REPLY_MODE != "NATURAL_AUTO_REPLY"', text)
