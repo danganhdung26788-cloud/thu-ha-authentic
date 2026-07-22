@@ -76,15 +76,28 @@ class MetaClient:
         return {"Authorization": f"Bearer {self.access_token}"}
 
     def verify_page(self) -> dict[str, Any]:
+        """Resolve the identity represented by the token and compare it to the expected Page.
+
+        Page access tokens are reliably introspected through ``/me``. Directly reading
+        ``/{page-id}`` may fail with Graph API code 100 when the token does not have a
+        separate Page-read permission, even though it can still represent the Page for
+        Messenger operations.
+        """
         response = self.session.get(
-            f"{self.base_url}/{self.page_id}",
+            f"{self.base_url}/me",
             params={"fields": "id,name"},
             headers=self.headers,
             timeout=REQUEST_TIMEOUT,
         )
         payload = self._payload(response)
-        if str(payload.get("id", "")) != self.page_id:
-            raise MetaSendError("Page token verification returned a different Page ID")
+        actual_id = str(payload.get("id", "")).strip()
+        if actual_id != self.page_id:
+            actual_name = str(payload.get("name", "")).strip()
+            raise MetaSendError(
+                "Page Access Token belongs to a different identity: "
+                f"expected_page_id={self.page_id} actual_id={actual_id or 'missing'} "
+                f"actual_name={actual_name or 'missing'}"
+            )
         return payload
 
     def send_text(self, recipient_id: str, text: str) -> dict[str, Any]:

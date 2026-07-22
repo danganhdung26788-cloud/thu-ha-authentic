@@ -38,13 +38,27 @@ class FakeRepo:
 
 
 class MetaOutboundSenderTests(unittest.TestCase):
-    def test_verify_page_token(self):
+    def test_verify_page_token_uses_me_identity(self):
         session = Mock()
         session.get.return_value = FakeResponse(200, {"id": "page-1", "name": "Thu Hà"})
         client = MetaClient("page-1", "token", session=session)
         page = client.verify_page()
         self.assertEqual(page["id"], "page-1")
+        self.assertTrue(session.get.call_args.args[0].endswith("/me"))
+        self.assertEqual(session.get.call_args.kwargs["params"], {"fields": "id,name"})
         self.assertIn("Bearer token", session.get.call_args.kwargs["headers"]["Authorization"])
+
+    def test_verify_page_token_rejects_wrong_identity_with_clear_ids(self):
+        session = Mock()
+        session.get.return_value = FakeResponse(200, {"id": "other-page", "name": "Other Page"})
+        secret = "super-secret-token-value"
+        client = MetaClient("page-1", secret, session=session)
+        with self.assertRaises(MetaSendError) as context:
+            client.verify_page()
+        message = str(context.exception)
+        self.assertIn("expected_page_id=page-1", message)
+        self.assertIn("actual_id=other-page", message)
+        self.assertNotIn(secret, message)
 
     def test_send_text_uses_response_message_type(self):
         session = Mock()
