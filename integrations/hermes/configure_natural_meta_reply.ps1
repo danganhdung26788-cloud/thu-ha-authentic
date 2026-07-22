@@ -39,7 +39,8 @@ function Get-EnvValue {
         [string]$Key
     )
     $prefix = "$Key="
-    foreach ($rawLine in @($Lines | Select-Object -Last $Lines.Count)) {
+    $value = $null
+    foreach ($rawLine in @($Lines)) {
         $line = Normalize-EnvLine -Line $rawLine
         if ($line.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
             $value = $line.Substring($prefix.Length)
