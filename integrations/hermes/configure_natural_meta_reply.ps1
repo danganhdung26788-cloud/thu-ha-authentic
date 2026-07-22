@@ -2,6 +2,7 @@ param(
     [ValidateSet('Enable', 'Disable')][string]$Action = 'Enable',
     [string]$ContainerName = 'hermes-gateway',
     [string]$EnvPath = 'D:\HermesAgent\data\.env',
+    [string]$InstalledIntegrationRoot = 'D:\HermesAgent\data\tha-integrations\integrations\hermes',
     [string]$PageId = '108621404211232',
     [string]$GraphVersion = 'v25.0',
     [switch]$UseExistingToken
@@ -10,6 +11,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$PageId = $PageId.Trim()
+$GraphVersion = $GraphVersion.Trim()
 
 function Normalize-EnvLine {
     param([string]$Line)
@@ -115,6 +118,16 @@ if ($Action -eq 'Disable') {
     Write-Host 'THA_META_AUTO_SEND=false'
     exit 0
 }
+
+$sourceSender = Join-Path $PSScriptRoot 'meta_outbound_sender.py'
+$targetSender = Join-Path $InstalledIntegrationRoot 'meta_outbound_sender.py'
+if (-not (Test-Path $sourceSender)) {
+    throw "Current Meta sender source not found: $sourceSender"
+}
+New-Item -ItemType Directory -Path $InstalledIntegrationRoot -Force | Out-Null
+Copy-Item -Path $sourceSender -Destination $targetSender -Force
+Write-Host 'META_OUTBOUND_SENDER_SYNCED=TRUE'
+Write-Host "META_OUTBOUND_SENDER_TARGET=$targetSender"
 
 $secureToken = $null
 $bstr = [IntPtr]::Zero

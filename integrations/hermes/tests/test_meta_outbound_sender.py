@@ -48,6 +48,17 @@ class MetaOutboundSenderTests(unittest.TestCase):
         self.assertEqual(session.get.call_args.kwargs["params"], {"fields": "id,name"})
         self.assertIn("Bearer token", session.get.call_args.kwargs["headers"]["Authorization"])
 
+    def test_meta_client_trims_identifiers_before_requests(self):
+        session = Mock()
+        session.get.return_value = FakeResponse(200, {"id": "page-1", "name": "Thu Hà"})
+        client = MetaClient(" page-1\r\n", " token-value\n", graph_version=" v25.0\r\n", session=session)
+        page = client.verify_page()
+        self.assertEqual(page["id"], "page-1")
+        self.assertEqual(client.page_id, "page-1")
+        self.assertEqual(client.access_token, "token-value")
+        self.assertEqual(client.graph_version, "v25.0")
+        self.assertEqual(session.get.call_args.args[0], "https://graph.facebook.com/v25.0/me")
+
     def test_verify_page_token_rejects_wrong_identity_with_clear_ids(self):
         session = Mock()
         session.get.return_value = FakeResponse(200, {"id": "other-page", "name": "Other Page"})
