@@ -58,7 +58,7 @@ try {
     $mutex = New-Object System.Threading.Mutex($false, "Global\HermesThuHaFanpageDraftProcessor")
     $hasLock = $mutex.WaitOne(0, $false)
     if (-not $hasLock) {
-        Write-HostLog "SKIP another Hermes AI-first processor instance is still running"
+        Write-HostLog "SKIP another Hermes conversation runtime instance is still running"
         exit 0
     }
 
@@ -78,15 +78,15 @@ if [ -f /opt/data/.env ]; then
   . /opt/data/.env
   set +a
 fi
-export HERMES_HOME=/opt/data
+export HERMES_HOME="${HERMES_HOME:-/opt/data}"
 export GOOGLE_APPLICATION_CREDENTIALS=/opt/data/google/application_default_credentials.json
 export PYTHONPATH=/opt/data/tha-integrations:/opt/data/tha-integrations/.vendor
 export THA_AI_FIRST_DRY_RUN=false
-python -m integrations.hermes.ai_first_reply_processor
+python -m integrations.hermes.conversation_runtime_processor
 python -m integrations.hermes.meta_outbound_sender
 '@ -replace "`r`n", "`n"
 
-    Write-HostLog "START container=$ContainerName processor=HERMES_AI_FIRST_ON_DEMAND_LOOKUP"
+    Write-HostLog "START container=$ContainerName processor=HERMES_CONVERSATION_RUNTIME"
     $result = Invoke-NativeCapture -FilePath 'docker' -Arguments @(
         'exec', $ContainerName, '/bin/sh', '-c', $shellCommand
     )
@@ -98,10 +98,10 @@ python -m integrations.hermes.meta_outbound_sender
     }
 
     if ($result.ExitCode -ne 0) {
-        throw "Hermes AI-first reply pipeline exited with code $($result.ExitCode)"
+        throw "Hermes conversation runtime pipeline exited with code $($result.ExitCode)"
     }
 
-    Write-HostLog "PASS Hermes AI-first reply pipeline completed"
+    Write-HostLog "PASS Hermes conversation runtime pipeline completed"
     exit 0
 }
 catch {
