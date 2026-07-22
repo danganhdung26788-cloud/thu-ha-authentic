@@ -38,9 +38,6 @@ function Invoke-NativeCapture {
     $output = @()
     $exitCode = 1
     try {
-        # Windows PowerShell 5 converts native stderr into NativeCommandError when
-        # ErrorActionPreference=Stop. unittest -v writes normal progress to stderr,
-        # so capture it without turning successful native execution into an exception.
         $ErrorActionPreference = 'Continue'
         $output = @(& $FilePath @Arguments 2>&1)
         $exitCode = $LASTEXITCODE
@@ -146,9 +143,11 @@ export GOOGLE_APPLICATION_CREDENTIALS=/opt/data/google/application_default_crede
 export PYTHONPATH=/opt/data/tha-integrations:/opt/data/tha-integrations/.vendor
 cd /opt/data/tha-integrations
 python -m unittest -v integrations.hermes.tests.test_natural_reply_processor
+python -m unittest -v integrations.hermes.tests.test_context_safety_regression
 python -m unittest -v integrations.hermes.tests.test_cosmetics_training_store
 python -m unittest -v integrations.hermes.tests.test_meta_outbound_sender
 hermes skills list | grep -i 'thu-ha-cosmetics'
+THA_CONTEXT_GUARD_DRY_RUN=true python -m integrations.hermes.safe_context_processor
 THA_NATURAL_REPLY_DRY_RUN=true python -m integrations.hermes.natural_reply_processor
 python -m integrations.hermes.meta_outbound_sender
 '@ -replace "`r`n", "`n"
@@ -166,5 +165,6 @@ Write-Host "SKILL_PATH=$SkillDestination"
 Write-Host "MEMORY_PATH=$MemoryPath"
 Write-Host "USER_PATH=$UserPath"
 Write-Host "TRAINING_PATH=$TrainingRoot"
-Write-Host 'PROCESSOR=NATURAL_SKILL_DRIVEN'
+Write-Host 'PROCESSOR=SAFE_CONTEXT_THEN_NATURAL'
+Write-Host 'CONTEXT_GUARD=ENABLED'
 Write-Host 'AUTO_SEND=FALSE'

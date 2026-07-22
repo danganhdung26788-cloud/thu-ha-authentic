@@ -16,7 +16,7 @@ if (-not (Test-Path $naturalInstaller)) {
     throw "Natural cosmetics installer not found: $naturalInstaller"
 }
 
-Write-Host 'Installing current natural-reply code and tests...'
+Write-Host 'Installing current natural-reply code, context guard and tests...'
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $naturalInstaller
 if ($LASTEXITCODE -ne 0) {
     throw "Natural cosmetics installation failed with exit code $LASTEXITCODE"
@@ -52,8 +52,12 @@ if (-not $health -or $health.status -ne 'ok') {
     throw 'Meta bridge health check failed after realtime installation.'
 }
 
-if ($health.mode -ne 'REALTIME_NATURAL_AUTO_REPLY') {
+if ($health.mode -ne 'REALTIME_NATURAL_AUTO_REPLY' -and $health.mode -ne 'DRAFT_ONLY_INGEST') {
     throw "Unexpected Meta bridge mode after restart: $($health.mode)"
+}
+
+if ($health.context_guard -ne 'enabled') {
+    throw "Context guard is not enabled after restart: $($health.context_guard)"
 }
 
 $task = Get-ScheduledTask -TaskName $FallbackTaskName -ErrorAction SilentlyContinue
@@ -81,7 +85,9 @@ Write-Host "META_CONTAINER=$MetaContainerName"
 Write-Host "LOCAL_HEALTH_STATUS=$($health.status)"
 Write-Host "MODE=$($health.mode)"
 Write-Host "SCHEDULED_FALLBACK=$($health.scheduled_fallback)"
+Write-Host "CONTEXT_GUARD=$($health.context_guard)"
 Write-Host "FALLBACK_TASK_STATE=$($task.State)"
 Write-Host "FALLBACK_LAST_RESULT=$($taskInfo.LastTaskResult)"
-Write-Host 'PRODUCT_CONTEXT=ENABLED'
-Write-Host 'SIMPLE_FOLLOWUP_FAST_PATH=ENABLED'
+Write-Host 'PRODUCT_CONTEXT=STRICT_TRUSTED_CONTEXT_ONLY'
+Write-Host 'RANDOM_CATALOG_FALLBACK=DISABLED'
+Write-Host 'CORRECTION_HANDOFF=ENABLED'
