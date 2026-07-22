@@ -1,14 +1,15 @@
-"""Hermes-first Messenger conversation orchestrator for Thu Ha Authentic.
+"""Conversation-native Messenger processor for Thu Ha Authentic.
 
-Hermes reasons over the customer thread before any catalog lookup. Product data is
-retrieved only when Hermes explicitly requests verified price, stock, usage, or a
-recommendation. Generic words and product attributes never select a catalog row.
+Hermes replies naturally first. It may append one hidden THA_TOOL marker only when
+verified product facts or recommendation candidates are required. Ordinary chat,
+clarifications, and greetings never pass through an action router or confidence gate.
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import subprocess
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
@@ -31,44 +32,43 @@ from integrations.hermes.natural_reply_processor import (
 
 DRY_RUN = os.getenv("THA_AI_FIRST_DRY_RUN", "true").lower() == "true"
 MAX_ITEMS = max(1, min(int(os.getenv("THA_AI_FIRST_MAX_ITEMS", "10")), 50))
-MAX_CONTEXT_TURNS = max(4, min(int(os.getenv("THA_AI_FIRST_CONTEXT_TURNS", "10")), 20))
+MAX_CONTEXT_TURNS = max(4, min(int(os.getenv("THA_AI_FIRST_CONTEXT_TURNS", "12")), 24))
 
-_ALLOWED_ACTIONS = {"TALK", "LOOKUP", "RECOMMEND", "HANDOFF"}
-_ALLOWED_LOOKUPS = {"NONE", "PRICE", "STOCK", "USAGE"}
+_TOOL_MARKER_RE = re.compile(r"\[\[THA_TOOL:(\{.*?\})\]\]\s*$", re.S)
 _GENERIC_REFERENCE_TOKENS = {
     "san", "pham", "loai", "cai", "nay", "do", "no", "em", "shop", "chi",
     "gia", "cach", "dung", "con", "hang", "kiem", "dau", "ngua", "mun",
     "kem", "sua", "nuoc", "gel", "serum", "lotion", "chong", "nang", "da",
     "va", "cho", "ml", "sp", "vua", "noi", "gioi", "thieu", "tren", "lai",
 }
-_SEARCH_STOPWORDS = _GENERIC_REFERENCE_TOKENS | {
+_SEARCH_STOPWORDS = {
     "tu", "van", "giup", "minh", "kha", "hay", "bi", "nen", "uu", "tien",
     "phu", "hop", "can", "muon", "hoi", "nhe", "nhi", "voi", "mot", "chut",
+    "san", "pham", "loai", "cai", "nay", "do", "no", "em", "shop", "chi",
+    "gia", "cach", "dung", "con", "hang", "kem", "sua", "nuoc", "gel",
+    "serum", "lotion", "va", "cho", "ml", "sp", "vua", "noi", "gioi",
+    "thieu", "tren", "lai",
 }
 
 
 @dataclass(frozen=True)
-class ConversationPlan:
-    action: str
-    lookup_type: str
-    product_refs: tuple[str, ...]
-    search_query: str
-    reply: str
-    intent: str
-    need_human: bool
-    confidence: float
+class ToolRequest:
+    name: str
+    lookup_type: str = "NONE"
+    product_refs: tuple[str, ...] = ()
+    search_query: str = ""
 
 
 def _clamp_confidence(value: object) -> float:
     try:
         number = float(value)
     except (TypeError, ValueError):
-        return 0.5
+        return 0.8
     return max(0.0, min(number, 1.0))
 
 
 def extract_json_object(value: str) -> dict[str, object]:
-    """Extract one JSON object from plain text or a fenced Hermes response."""
+    """Compatibility helper for tests and hidden tool payloads."""
     text = (value or "").strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I | re.S).strip()
     try:
@@ -77,23 +77,22 @@ def extract_json_object(value: str) -> dict[str, object]:
             return payload
     except json.JSONDecodeError:
         pass
-
     start = text.find("{")
     end = text.rfind("}")
     if start < 0 or end <= start:
-        raise ValueError("Hermes did not return a JSON object")
+        raise ValueError("No JSON object found")
     payload = json.loads(text[start : end + 1])
     if not isinstance(payload, dict):
-        raise ValueError("Hermes plan must be a JSON object")
+        raise ValueError("Tool payload must be a JSON object")
     return payload
 
 
-def parse_plan(payload: dict[str, object]) -> ConversationPlan:
-    action = str(payload.get("action", "TALK")).strip().upper()
-    if action not in _ALLOWED_ACTIONS:
-        action = "TALK"
+def parse_tool_request(payload: dict[str, object]) -> ToolRequest | None:
+    name = str(payload.get("name", "")).strip().upper()
+    if name not in {"PRODUCT_FACTS", "RECOMMEND_PRODUCTS"}:
+        return None
     lookup_type = str(payload.get("lookup_type", "NONE")).strip().upper()
-    if lookup_type not in _ALLOWED_LOOKUPS:
+    if lookup_type not in {"NONE", "PRICE", "STOCK", "USAGE"}:
         lookup_type = "NONE"
     raw_refs = payload.get("product_refs", [])
     refs: list[str] = []
@@ -102,30 +101,40 @@ def parse_plan(payload: dict[str, object]) -> ConversationPlan:
             value = str(item).strip()
             if value and value not in refs:
                 refs.append(value)
-    return ConversationPlan(
-        action=action,
+    return ToolRequest(
+        name=name,
         lookup_type=lookup_type,
         product_refs=tuple(refs[:4]),
         search_query=str(payload.get("search_query", "")).strip(),
-        reply=str(payload.get("reply", "")).strip(),
-        intent=str(payload.get("intent", "NATURAL_CONVERSATION")).strip().upper()
-        or "NATURAL_CONVERSATION",
-        need_human=bool(payload.get("need_human", False)),
-        confidence=_clamp_confidence(payload.get("confidence", 0.7)),
     )
+
+
+def split_natural_response(raw: str) -> tuple[str, ToolRequest | None]:
+    """Return natural text and an optional hidden tool request.
+
+    Malformed markers never force handoff. The natural part remains usable.
+    """
+    text = (raw or "").strip()
+    match = _TOOL_MARKER_RE.search(text)
+    if not match:
+        return text, None
+    natural = text[: match.start()].strip()
+    try:
+        request = parse_tool_request(json.loads(match.group(1)))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        request = None
+    return natural, request
 
 
 def is_conversation_reset(message: str) -> bool:
     normalized = normalize_text(message)
     phrases = (
         "test context safe",
+        "test hermes ai first",
         "bat dau lai",
         "hoi lai tu dau",
         "tu van lai tu dau",
-        "shop tu van giup",
-        "tu van giup chi",
-        "tu van giup em",
-        "chao shop",
+        "minh bat dau lai",
     )
     return any(phrase in normalized for phrase in phrases)
 
@@ -138,8 +147,9 @@ def _context_item(row: dict[str, str]) -> dict[str, object]:
         confidence = None
     reliable = (
         str(row.get("NEED_HUMAN", "")).strip().upper() != "TRUE"
-        and str(row.get("INTENT", "")).strip().upper() not in {"HUMAN_HANDOFF", "CONTEXT_UNRESOLVED"}
-        and (confidence is None or confidence >= 0.65)
+        and str(row.get("INTENT", "")).strip().upper()
+        not in {"HUMAN_HANDOFF", "CONTEXT_UNRESOLVED"}
+        and (confidence is None or confidence >= 0.55)
     )
     return {
         "customer": str(row.get("MESSAGE_TEXT", "")).strip(),
@@ -158,7 +168,6 @@ def conversation_context(
     current_message: str,
     limit: int = MAX_CONTEXT_TURNS,
 ) -> list[dict[str, object]]:
-    """Return one customer thread, reset at the latest explicit new consultation."""
     if is_conversation_reset(current_message):
         return []
     prior = [
@@ -173,53 +182,56 @@ def conversation_context(
     return [_context_item(row) for row in prior[reset_at:]][-limit:]
 
 
-def build_plan_prompt(message: str, context: list[dict[str, object]]) -> str:
-    memory = read_text(MEMORY_PATH, 3500)
-    user_profile = read_text(USER_PATH, 1800)
+def build_conversation_prompt(
+    message: str,
+    context: list[dict[str, object]],
+) -> str:
+    memory = read_text(MEMORY_PATH, 4500)
+    user_profile = read_text(USER_PATH, 2200)
     return f"""/thu-ha-cosmetics
-Ban la Hermes, tu van vien hoi thoai cua Fanpage Thu Ha Authentic.
-Nhiem vu luc nay chi la DOC MACH HOI THOAI VA LAP KE HOACH TRA LOI. Chua tra catalog.
+Bạn là nhân viên tư vấn trực tuyến của Fanpage Thu Hà Authentic.
+Hãy nói chuyện như một người bán hàng tử tế, tự nhiên, hiểu ngữ cảnh và ngắn gọn.
 
-TIN NHAN HIEN TAI:
+TIN NHẮN HIỆN TẠI:
 {message}
 
-HOI THOAI GAN NHAT (moi dong gom loi khach va cau shop da tra):
+HỘI THOẠI GẦN NHẤT:
 {json.dumps(context, ensure_ascii=False, indent=2)}
 
-BO NHO NGAN:
+BỘ NHỚ:
 {memory}
 
-HO SO NGUOI TRAINING:
+HỒ SƠ TRAINING:
 {user_profile}
 
-Tra ve DUY NHAT mot JSON hop le theo schema:
-{{
-  "action": "TALK|LOOKUP|RECOMMEND|HANDOFF",
-  "lookup_type": "NONE|PRICE|STOCK|USAGE",
-  "product_refs": ["ten day du hoac ma san pham da xuat hien trong hoi thoai"],
-  "search_query": "nhu cau da/san pham can tim, chi dung khi action=RECOMMEND",
-  "reply": "cau tra loi tu nhien, chi dung khi action=TALK hoac HANDOFF",
-  "intent": "nhan y dinh ngan gon",
-  "need_human": false,
-  "confidence": 0.0
-}}
+NGUYÊN TẮC:
+- Trả lời trực tiếp bằng tiếng Việt tự nhiên. Không xuất phân tích, nhãn, JSON hay giải thích nội bộ.
+- Câu chào, cảm ơn, câu hỏi xã giao hoặc câu hỏi bình thường phải trả lời ngay như người thật.
+- Không chuyển Thu Hà chỉ vì thiếu ngữ cảnh, không chắc chắn hoặc không hiểu trọn vẹn.
+  Khi cần, hãy hỏi lại một câu ngắn, tự nhiên.
+- Tự nối mạch các đại từ như “nó”, “loại đó”, “sản phẩm em vừa nói” theo hội thoại.
+- Không tự đổi sang sản phẩm khác chỉ vì cùng có thuộc tính như “kiềm dầu”, “mụn”, “dưỡng ẩm”.
+- Chỉ chuyển người thật khi khách yêu cầu gặp người thật hoặc có tình huống an toàn nghiêm trọng.
+- Không chẩn đoán bệnh, không phóng đại công dụng.
 
-QUY TAC BAT BUOC:
-1. Suy luan theo mach hoi thoai truoc, khong tim san pham tu mot tinh tu hay tu chung chung.
-2. "san pham em dang noi", "loai do", "cai do" tro den san pham cu the gan nhat ma shop vua noi.
-3. "lai kiem dau di" trong mach dang hoi cach dung nghia la quay lai san pham kiem dau da noi truoc do; KHONG co nghia la tim mot san pham moi co chu kiem dau.
-4. Neu khach hoi gia, ton kho hoac cach dung cua san pham da xac dinh: action=LOOKUP va product_refs phai la ten day du/ma da co trong hoi thoai.
-5. Neu khach dang mo dau mot nhu cau tu van moi: action=RECOMMEND, search_query mo ta dung nhu cau; khong tu chen ten san pham chua tra du lieu.
-6. Cau giao tiep thong thuong khong can du lieu: action=TALK va viet reply tu nhien.
-7. Khong tin tuyet doi cau shop cu co reliable=false. Neu khach bao tra loi sai/nham, action=HANDOFF, xin loi ngan gon va khong lap lai san pham sai.
-8. Product_refs khong duoc chi la "kiem dau", "san pham nay", "loai nay" hoac mot thuoc tinh chung.
-9. Khong chuan doan benh, khong phong dai cong dung.
+CHỈ KHI CẦN DỮ LIỆU CHÍNH XÁC:
+1. Giá, tồn kho hoặc cách dùng của sản phẩm đã xác định:
+   Viết một câu tự nhiên ngắn nếu cần, rồi thêm đúng một dòng cuối:
+   [[THA_TOOL:{{"name":"PRODUCT_FACTS","lookup_type":"PRICE|STOCK|USAGE","product_refs":["tên đầy đủ hoặc mã sản phẩm đã có trong hội thoại"]}}]]
+2. Cần tìm sản phẩm phù hợp với nhu cầu mới:
+   Thêm đúng một dòng cuối:
+   [[THA_TOOL:{{"name":"RECOMMEND_PRODUCTS","lookup_type":"NONE","product_refs":[],"search_query":"mô tả nhu cầu da cụ thể"}}]]
+
+Không dùng THA_TOOL cho câu chào, trò chuyện xã giao, câu hỏi làm rõ hoặc khi có thể trả lời tự nhiên mà không cần số liệu.
 """
 
 
-def call_plan(message: str, context: list[dict[str, object]]) -> ConversationPlan:
-    raw = call_hermes(build_plan_prompt(message, context))
-    return parse_plan(extract_json_object(raw))
+def call_conversation(
+    message: str,
+    context: list[dict[str, object]],
+) -> tuple[str, ToolRequest | None]:
+    raw = call_hermes(build_conversation_prompt(message, context))
+    return split_natural_response(raw)
 
 
 def _distinctive_tokens(value: str) -> set[str]:
@@ -239,7 +251,7 @@ def resolve_product_refs(
     product_rows: list[dict[str, str]],
     limit: int = 4,
 ) -> list[dict[str, str]]:
-    """Resolve only explicit Hermes references; never use generic attributes."""
+    """Resolve only explicit names/ids supplied by Hermes."""
     products = _available_products(product_rows)
     by_key: dict[str, dict[str, str]] = {}
     for product in products:
@@ -337,45 +349,57 @@ def _product_facts(product: dict[str, str]) -> dict[str, str]:
     )
 
 
-def build_lookup_reply_prompt(
+def build_grounded_prompt(
     message: str,
     context: list[dict[str, object]],
-    plan: ConversationPlan,
+    request: ToolRequest,
     products: list[dict[str, str]],
 ) -> str:
     facts = [_product_facts(product) for product in products]
+    task = (
+        f"Trả lời đúng dữ liệu {request.lookup_type} của sản phẩm khách đang hỏi."
+        if request.name == "PRODUCT_FACTS"
+        else "Chọn tối đa 2 sản phẩm phù hợp nhất và tư vấn tự nhiên."
+    )
     return f"""/thu-ha-cosmetics
-Ban da doc mach hoi thoai va xac dinh can tra du lieu {plan.lookup_type}.
-Hay viet DUY NHAT cau tra loi gui khach, tieng Viet tu nhien, ngan gon.
+Bạn đang tiếp tục đúng cuộc trò chuyện với khách của Thu Hà Authentic.
+{task}
 
-TIN NHAN HIEN TAI:
+TIN NHẮN HIỆN TẠI:
 {message}
 
-NGU CANH:
+HỘI THOẠI:
 {json.dumps(context, ensure_ascii=False, indent=2)}
 
-DU LIEU DA XAC MINH:
+DỮ LIỆU ĐÃ XÁC MINH:
 {json.dumps(facts, ensure_ascii=False, indent=2)}
 
-Chi dung du lieu da xac minh. Khong dua them san pham khac. Khong hoi lai ten san pham
-neu san pham da duoc xac dinh. Neu lookup_type=USAGE, tra dung cach dung phu hop trong
-du lieu; neu du lieu chua du, noi Thu Ha se kiem tra, khong tu sang tac. Khong tu dong
-moi tao don neu khach chi hoi thong tin.
+Viết duy nhất nội dung gửi khách bằng tiếng Việt tự nhiên, ngắn gọn.
+Không xuất JSON, THA_TOOL, mã nội bộ hoặc phân tích.
+Không thêm sản phẩm ngoài dữ liệu trên. Không tự đổi sản phẩm.
+Nếu dữ liệu chưa đủ, hỏi lại tự nhiên; không tự động chuyển Thu Hà.
+Không mời tạo đơn nếu khách chỉ hỏi thông tin.
 """
 
 
-def deterministic_lookup_fallback(
-    lookup_type: str,
+def compose_grounded_reply(
+    message: str,
+    context: list[dict[str, object]],
+    request: ToolRequest,
     products: list[dict[str, str]],
 ) -> str:
-    if lookup_type == "PRICE":
+    return call_hermes(build_grounded_prompt(message, context, request, products)).strip()
+
+
+def deterministic_fact_fallback(request: ToolRequest, products: list[dict[str, str]]) -> str:
+    if request.lookup_type == "PRICE":
         lines = [
             f"• {str(product.get('product_name', 'Sản phẩm')).strip()}: "
             f"{display_price(product.get('sale_price', '')) or 'chưa cập nhật giá'}"
             for product in products
         ]
         return "Dạ, giá hiện tại là:\n" + "\n".join(lines)
-    if lookup_type == "STOCK":
+    if request.lookup_type == "STOCK":
         lines = [
             f"• {str(product.get('product_name', 'Sản phẩm')).strip()}: "
             f"{str(product.get('stock_status', '')).strip() or 'chưa rõ tồn kho'}"
@@ -387,74 +411,31 @@ def deterministic_lookup_fallback(
     usage = str(product.get("usage", "")).strip() or str(product.get("main_usage", "")).strip()
     if usage:
         return f"Dạ, với {name}: {usage}"
-    return f"Dạ, em cần Thu Hà kiểm tra cách dùng chuẩn của {name} rồi báo chị ngay ạ."
+    return f"Dạ, chị cho em ít phút kiểm tra lại cách dùng chuẩn của {name} nhé."
 
 
-def compose_lookup_reply(
-    message: str,
-    context: list[dict[str, object]],
-    plan: ConversationPlan,
-    products: list[dict[str, str]],
-) -> tuple[str, str]:
-    try:
-        reply = call_hermes(build_lookup_reply_prompt(message, context, plan, products))
-        return reply, ""
-    except Exception as exc:  # noqa: BLE001 - fallback must keep the live queue moving
-        return deterministic_lookup_fallback(plan.lookup_type, products), f"LOOKUP_COMPOSE_FALLBACK: {str(exc)[:300]}"
+def natural_failure_fallback(message: str) -> str:
+    normalized = normalize_text(message)
+    if any(
+        normalized == phrase or normalized.startswith(phrase + " ")
+        for phrase in ("xin chao", "chao", "hello", "hi", "chao shop")
+    ):
+        return "Dạ em chào chị ạ 😊 Chị đang quan tâm sản phẩm hay vấn đề da nào để em hỗ trợ?"
+    if any(phrase in normalized for phrase in ("cam on", "thank", "ok em", "ok shop")):
+        return "Dạ không có gì ạ 😊 Chị cần thêm thông tin gì cứ nhắn em nhé."
+    return "Dạ chị nói thêm giúp em một chút về điều chị đang cần, em tư vấn tiếp cho đúng ý mình ạ."
 
 
-def build_recommendation_prompt(
-    message: str,
-    context: list[dict[str, object]],
-    search_query: str,
-    candidates: list[dict[str, str]],
-) -> str:
-    facts = [_product_facts(product) for product in candidates]
-    return f"""/thu-ha-cosmetics
-Hermes da xac dinh khach can tu van theo nhu cau: {search_query}
-Hay chon toi da 2 san pham PHU HOP NHAT tu danh sach da tra va soan cau tra loi tu nhien.
-
-TIN NHAN KHACH:
-{message}
-
-NGU CANH:
-{json.dumps(context, ensure_ascii=False, indent=2)}
-
-CAC SAN PHAM DA TRA:
-{json.dumps(facts, ensure_ascii=False, indent=2)}
-
-Tra ve DUY NHAT JSON hop le:
-{{
-  "reply": "cau tu van ngan gon, giai thich vi sao phu hop va hoi mot cau de hieu them nhu cau",
-  "product_ids": ["P..."],
-  "intent": "PRODUCT_CONSULTATION",
-  "confidence": 0.0
-}}
-Khong chon san pham ngoai danh sach. Khong bao dam tri mun, khong chuan doan benh.
-Khong tu dong noi gia/ton kho neu khach chua hoi, tru khi can lam ro lua chon.
-"""
-
-
-def compose_recommendation(
-    message: str,
-    context: list[dict[str, object]],
-    search_query: str,
-    candidates: list[dict[str, str]],
-) -> tuple[str, list[dict[str, str]], float]:
-    raw = call_hermes(build_recommendation_prompt(message, context, search_query, candidates))
-    payload = extract_json_object(raw)
-    reply = str(payload.get("reply", "")).strip()
-    ids = payload.get("product_ids", [])
-    selected = resolve_product_refs(ids if isinstance(ids, list) else [], candidates, limit=2)
-    if not reply:
-        raise ValueError("Hermes recommendation reply is empty")
-    return reply, selected, _clamp_confidence(payload.get("confidence", 0.78))
-
-
-def handoff_reply(plan: ConversationPlan) -> str:
-    if plan.reply:
-        return plan.reply
-    return "Dạ em xin lỗi, em chưa hiểu đúng mạch trao đổi. Em chuyển Thu Hà xem lại và tư vấn trực tiếp cho chị ngay ạ."
+def _intent_for_request(request: ToolRequest | None) -> str:
+    if request is None:
+        return "NATURAL_CONVERSATION"
+    if request.name == "RECOMMEND_PRODUCTS":
+        return "PRODUCT_CONSULTATION"
+    return {
+        "PRICE": "PRODUCT_PRICE",
+        "STOCK": "PRODUCT_STOCK",
+        "USAGE": "BASIC_USAGE",
+    }.get(request.lookup_type, "PRODUCT_INFORMATION")
 
 
 def process_new_messages(repo: SheetsRepository) -> tuple[int, int, int]:
@@ -473,82 +454,85 @@ def process_new_messages(repo: SheetsRepository) -> tuple[int, int, int]:
         message = str(row.get("MESSAGE_TEXT", "")).strip()
         customer_id = str(row.get("CUSTOMER_ID", "")).strip()
         context = conversation_context(queue_rows, index, customer_id, message)
+        error = ""
+        products: list[dict[str, str]] = []
+        request: ToolRequest | None = None
+        need_human = requires_human(message)
+        confidence = 0.86
+
         try:
-            plan = call_plan(message, context)
-            need_human = plan.need_human or requires_human(message)
-            error = ""
-            products: list[dict[str, str]] = []
-            confidence = plan.confidence
-            intent = plan.intent
-
-            if plan.action == "LOOKUP":
-                products = resolve_product_refs(plan.product_refs, product_rows)
-                if not products:
-                    reply = (
-                        "Dạ em chưa xác định chắc đúng sản phẩm chị đang nhắc tới nên em không đoán. "
-                        "Chị nhắc giúp em đúng tên trên chai hoặc gửi ảnh, em kiểm tra ngay ạ."
-                    )
-                    intent = "CONTEXT_CLARIFICATION"
-                    need_human = True
-                    confidence = min(confidence, 0.35)
+            natural_reply, request = call_conversation(message, context)
+            reply = natural_reply.strip()
+            if request is not None:
+                if request.name == "PRODUCT_FACTS":
+                    products = resolve_product_refs(request.product_refs, product_rows)
+                    if products:
+                        try:
+                            reply = compose_grounded_reply(
+                                message, context, request, products
+                            )
+                        except (RuntimeError, subprocess.TimeoutExpired, OSError) as exc:
+                            reply = deterministic_fact_fallback(request, products)
+                            error = f"GROUNDED_COMPOSE_FALLBACK: {str(exc)[:300]}"
+                            fallbacks += 1
+                            confidence = 0.65
+                    elif not reply:
+                        reply = (
+                            "Dạ chị nhắc giúp em đúng tên sản phẩm trên chai hoặc gửi ảnh nhé, "
+                            "em kiểm tra giá/cách dùng cho chính xác ạ."
+                        )
+                        confidence = 0.62
                 else:
-                    reply, error = compose_lookup_reply(message, context, plan, products)
-                    if error:
-                        fallbacks += 1
-            elif plan.action == "RECOMMEND":
-                candidates = retrieve_recommendation_candidates(plan.search_query, product_rows)
-                if not candidates:
-                    reply = (
-                        "Dạ em đã hiểu nhu cầu của chị nhưng chưa lọc được sản phẩm đủ chắc chắn từ dữ liệu hiện tại. "
-                        "Em chuyển Thu Hà kiểm tra và tư vấn đúng sản phẩm cho chị ạ."
+                    products = retrieve_recommendation_candidates(
+                        request.search_query, product_rows
                     )
-                    intent = "HUMAN_HANDOFF"
-                    need_human = True
-                    confidence = min(confidence, 0.35)
-                else:
-                    reply, products, confidence = compose_recommendation(
-                        message, context, plan.search_query, candidates
-                    )
-                    intent = "PRODUCT_CONSULTATION"
-            elif plan.action == "HANDOFF":
-                reply = handoff_reply(plan)
-                intent = "HUMAN_HANDOFF"
-                need_human = True
-            else:
-                reply = plan.reply or "Dạ chị nói thêm giúp em một chút để em hiểu đúng ý mình nhé."
-
-            product_key = ",".join(
-                str(product.get("product_id", "")).strip()
-                for product in products
-                if str(product.get("product_id", "")).strip()
-            )
-            decision = NaturalReplyDecision(
-                intent=intent,
-                product_key=product_key,
-                reply=reply,
-                confidence=confidence,
-                need_human=need_human,
-                error=error,
-            )
-        except Exception as exc:  # noqa: BLE001 - fail closed without retry loops
+                    if products:
+                        try:
+                            reply = compose_grounded_reply(
+                                message, context, request, products
+                            )
+                        except (RuntimeError, subprocess.TimeoutExpired, OSError) as exc:
+                            reply = natural_reply.strip() or (
+                                "Dạ chị cho em biết thêm sản phẩm chị đang dùng và mức độ dầu/mụn "
+                                "hiện tại nhé, em lọc lựa chọn phù hợp hơn ạ."
+                            )
+                            error = f"RECOMMEND_COMPOSE_FALLBACK: {str(exc)[:300]}"
+                            fallbacks += 1
+                            confidence = 0.60
+                    elif not reply:
+                        reply = (
+                            "Dạ chị cho em biết thêm sản phẩm đang dùng và tình trạng da cụ thể "
+                            "một chút nhé, em tư vấn sát hơn ạ."
+                        )
+                        confidence = 0.62
+            if not reply:
+                reply = natural_failure_fallback(message)
+                confidence = 0.58
+        except (RuntimeError, subprocess.TimeoutExpired, OSError, ValueError) as exc:
+            reply = natural_failure_fallback(message)
+            error = f"HERMES_NATURAL_FALLBACK: {str(exc)[:300]}"
             fallbacks += 1
-            decision = NaturalReplyDecision(
-                intent="HUMAN_HANDOFF",
-                product_key="",
-                reply=(
-                    "Dạ em đang chưa đọc đúng mạch trao đổi nên không muốn trả lời đoán. "
-                    "Em chuyển Thu Hà kiểm tra và phản hồi trực tiếp cho chị ngay ạ."
-                ),
-                confidence=0.0,
-                need_human=True,
-                error=f"AI_FIRST_FALLBACK: {str(exc)[:350]}",
-            )
+            confidence = 0.55
 
+        product_key = ",".join(
+            str(product.get("product_id", "")).strip()
+            for product in products
+            if str(product.get("product_id", "")).strip()
+        )
+        decision = NaturalReplyDecision(
+            intent=_intent_for_request(request),
+            product_key=product_key,
+            reply=reply[:1800],
+            confidence=confidence,
+            need_human=need_human,
+            error=error,
+        )
         if not DRY_RUN:
             repo.update_reply(row_number, decision)
         processed += 1
         if processed >= MAX_ITEMS:
             break
+
     return eligible, processed, fallbacks
 
 
@@ -556,8 +540,9 @@ def main() -> int:
     repo = SheetsRepository(FAST_INDEX_ID)
     eligible, processed, fallbacks = process_new_messages(repo)
     print(
-        "PASS Hermes AI-first processor "
-        f"eligible={eligible} processed={processed} fallbacks={fallbacks} dry_run={DRY_RUN}"
+        "PASS Hermes conversation-native processor "
+        f"eligible={eligible} processed={processed} "
+        f"fallbacks={fallbacks} dry_run={DRY_RUN}"
     )
     return 0
 
