@@ -60,6 +60,14 @@ class ProductionHardeningContractTests(unittest.TestCase):
         self.assertIn("Normalize-EnvLine", text)
         self.assertIn("$candidate.Substring(1, $candidate.Length - 2)", text)
 
+    def test_meta_activation_syncs_current_sender_before_verification(self):
+        text = self.read("configure_natural_meta_reply.ps1")
+        self.assertIn("$sourceSender = Join-Path $PSScriptRoot 'meta_outbound_sender.py'", text)
+        self.assertIn("Copy-Item -Path $sourceSender -Destination $targetSender -Force", text)
+        self.assertIn("META_OUTBOUND_SENDER_SYNCED=TRUE", text)
+        sender = self.read("meta_outbound_sender.py")
+        self.assertIn('PAGE_ID = os.getenv("THA_META_PAGE_ID", "108621404211232").strip()', sender)
+
     def test_named_tunnel_uses_token_file_not_cli_token(self):
         text = self.read("install_meta_named_tunnel.ps1")
         self.assertIn("--token-file /run/secrets/tunnel-token", text)
