@@ -1,8 +1,8 @@
 """Direct Meta Messenger webhook adapter for Thu Hà Authentic.
 
 Verified text messages are written to FANPAGE_QUEUE. The bridge then starts the
-natural-reply pipeline immediately in a serialized background worker. The Windows
-Scheduled Task remains a fallback for messages that could not be processed live.
+safe context guard, natural-reply processor and Meta sender immediately in a
+serialized background worker. The Windows Scheduled Task remains a fallback.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from google.auth import default as google_auth_default
 from googleapiclient.discovery import build
 
 LOGGER = logging.getLogger("tha_meta_messenger_bridge")
-app = FastAPI(title="Thu Hà Authentic Meta Messenger Bridge", version="1.1.0")
+app = FastAPI(title="Thu Hà Authentic Meta Messenger Bridge", version="1.2.0")
 
 
 def now_iso() -> str:
@@ -151,10 +151,23 @@ def load_runtime_env(path: Path = ENV_PATH) -> dict[str, str]:
 
 
 def run_realtime_pipeline() -> None:
-    """Generate and send new replies now; Scheduled Task remains the retry path."""
+    """Guard context, generate remaining replies, then send; task is retry path."""
     with PIPELINE_LOCK:
         load_runtime_env()
+        os.environ["THA_CONTEXT_GUARD_DRY_RUN"] = "false"
         os.environ["THA_NATURAL_REPLY_DRY_RUN"] = "false"
+
+        guard = importlib.import_module(
+            "integrations.hermes.safe_context_processor"
+        )
+        guard = importlib.reload(guard)
+        guard_repo = guard.SheetsRepository(guard.FAST_INDEX_ID)
+        guard_eligible, guard_processed = guard.process_new_messages(guard_repo)
+        LOGGER.info(
+            "Realtime context guard eligible=%s processed=%s",
+            guard_eligible,
+            guard_processed,
+        )
 
         processor = importlib.import_module(
             "integrations.hermes.natural_reply_processor"
@@ -168,7 +181,7 @@ def run_realtime_pipeline() -> None:
             processed,
             fallbacks,
         )
-        if processed == 0:
+        if guard_processed + processed == 0:
             return
 
         sender = importlib.import_module("integrations.hermes.meta_outbound_sender")
@@ -289,5 +302,6 @@ def health() -> dict[str, str]:
         "status": "ok",
         "mode": "REALTIME_NATURAL_AUTO_REPLY" if active else "DRAFT_ONLY_INGEST",
         "scheduled_fallback": "enabled",
+        "context_guard": "enabled",
         "fanpage_queue_id": FAST_INDEX_ID,
     }
