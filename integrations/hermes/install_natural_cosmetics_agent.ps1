@@ -1,10 +1,10 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
-
 param(
     [string]$Container = 'hermes-gateway',
     [string]$HermesData = 'D:\HermesAgent\data'
 )
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $SourceIntegrations = Join-Path $RepoRoot 'integrations'
@@ -119,8 +119,11 @@ export GOOGLE_APPLICATION_CREDENTIALS=/opt/data/google/application_default_crede
 export PYTHONPATH=/opt/data/tha-integrations:/opt/data/tha-integrations/.vendor
 cd /opt/data/tha-integrations
 python -m unittest -v integrations.hermes.tests.test_natural_reply_processor
+python -m unittest -v integrations.hermes.tests.test_cosmetics_training_store
+python -m unittest -v integrations.hermes.tests.test_meta_outbound_sender
 hermes skills list | grep -i 'thu-ha-cosmetics'
 THA_NATURAL_REPLY_DRY_RUN=true python -m integrations.hermes.natural_reply_processor
+python -m integrations.hermes.meta_outbound_sender
 '@ -replace "`r`n", "`n"
 
 $output = docker exec $Container /bin/sh -c $verifyScript 2>&1
