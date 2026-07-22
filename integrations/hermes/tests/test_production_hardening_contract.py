@@ -48,10 +48,17 @@ class ProductionHardeningContractTests(unittest.TestCase):
     def test_meta_activation_can_reuse_container_token_without_printing_it(self):
         text = self.read("configure_natural_meta_reply.ps1")
         self.assertIn("RUNNING_CONTAINER_ENV", text)
-        self.assertIn("META_PAGE_ACCESS_TOKEN_NOT_FOUND_IN_ENV_OR_CONTAINER", text)
-        self.assertIn("printf %s", text)
+        self.assertIn("RUNNING_CONTAINER_DATA_ENV", text)
+        self.assertIn("META_PAGE_ACCESS_TOKEN_NOT_FOUND_IN_LOCAL_ENV_CONTAINER_ENV_OR_DATA_ENV", text)
+        self.assertIn(". /opt/data/.env", text)
         self.assertIn("TOKEN_SOURCE=$tokenSource", text)
         self.assertNotIn("Write-Host $plainToken", text)
+
+    def test_meta_activation_parses_exported_or_quoted_env_values(self):
+        text = self.read("configure_natural_meta_reply.ps1")
+        self.assertIn("(?:export\\s+)?", text)
+        self.assertIn("Normalize-EnvLine", text)
+        self.assertIn("$candidate.Substring(1, $candidate.Length - 2)", text)
 
     def test_named_tunnel_uses_token_file_not_cli_token(self):
         text = self.read("install_meta_named_tunnel.ps1")
