@@ -18,8 +18,8 @@ from integrations.hermes.fanpage_draft_processor import rows_to_dicts
 FAST_INDEX_ID = os.getenv(
     "THA_HERMES_FAST_INDEX_ID",
     "1ZACaor_QW1sQX35S-_PpqjcyX02iiSQPImYCHhaUIf0",
-)
-PAGE_ID = os.getenv("THA_META_PAGE_ID", "108621404211232")
+).strip()
+PAGE_ID = os.getenv("THA_META_PAGE_ID", "108621404211232").strip()
 PAGE_ACCESS_TOKEN = os.getenv("META_PAGE_ACCESS_TOKEN", "").strip()
 GRAPH_VERSION = os.getenv("META_GRAPH_API_VERSION", "v25.0").strip()
 REPLY_MODE = os.getenv("THA_REPLY_MODE", "DRAFT_ONLY").strip().upper()
@@ -61,10 +61,15 @@ class MetaClient:
         graph_version: str = GRAPH_VERSION,
         session: requests.Session | None = None,
     ) -> None:
+        page_id = (page_id or "").strip()
+        access_token = (access_token or "").strip()
+        graph_version = (graph_version or "").strip()
         if not page_id:
             raise ValueError("Meta Page ID is required")
         if not access_token:
             raise ValueError("Meta Page Access Token is required")
+        if not graph_version:
+            raise ValueError("Meta Graph API version is required")
         self.page_id = page_id
         self.access_token = access_token
         self.graph_version = graph_version
