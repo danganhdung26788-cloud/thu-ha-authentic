@@ -54,13 +54,15 @@ if [ -f /opt/data/.env ]; then
   . /opt/data/.env
   set +a
 fi
+export HERMES_HOME=/opt/data
 export GOOGLE_APPLICATION_CREDENTIALS=/opt/data/google/application_default_credentials.json
 export PYTHONPATH=/opt/data/tha-integrations:/opt/data/tha-integrations/.vendor
 export THA_NATURAL_REPLY_DRY_RUN=false
 python -m integrations.hermes.natural_reply_processor
+python -m integrations.hermes.meta_outbound_sender
 '@ -replace "`r`n", "`n"
 
-    Write-HostLog "START container=$ContainerName processor=NATURAL_SKILL_DRIVEN auto_send=FALSE"
+    Write-HostLog "START container=$ContainerName processor=NATURAL_SKILL_DRIVEN"
     $output = & docker exec $ContainerName /bin/sh -c $shellCommand 2>&1
     $exitCode = $LASTEXITCODE
 
@@ -71,10 +73,10 @@ python -m integrations.hermes.natural_reply_processor
     }
 
     if ($exitCode -ne 0) {
-        throw "Natural reply processor exited with code $exitCode"
+        throw "Natural reply pipeline exited with code $exitCode"
     }
 
-    Write-HostLog "PASS Natural reply processor completed auto_send=FALSE"
+    Write-HostLog "PASS Natural reply pipeline completed"
     exit 0
 }
 catch {
