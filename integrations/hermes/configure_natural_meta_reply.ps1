@@ -3,7 +3,8 @@ param(
     [string]$ContainerName = 'hermes-gateway',
     [string]$EnvPath = 'D:\HermesAgent\data\.env',
     [string]$PageId = '108621404211232',
-    [string]$GraphVersion = 'v25.0'
+    [string]$GraphVersion = 'v25.0',
+    [switch]$UseExistingToken
 )
 
 Set-StrictMode -Version Latest
@@ -19,6 +20,43 @@ function Set-EnvValue {
     $filtered = @($Lines | Where-Object { $_ -notmatch ('^' + [regex]::Escape($Key) + '=') })
     $filtered += "$Key=$Value"
     return ,$filtered
+}
+
+function Get-EnvValue {
+    param(
+        [string[]]$Lines,
+        [string]$Key
+    )
+    $prefix = "$Key="
+    $line = @($Lines | Where-Object { $_.StartsWith($prefix, [System.StringComparison]::Ordinal) } | Select-Object -Last 1)
+    if ($line.Count -eq 0) {
+        return ''
+    }
+    return $line[0].Substring($prefix.Length)
+}
+
+function Invoke-NativeCapture {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    $previousPreference = $ErrorActionPreference
+    $output = @()
+    $exitCode = 1
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $FilePath @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    return [pscustomobject]@{
+        Output = $output
+        ExitCode = $exitCode
+    }
 }
 
 if (-not (Test-Path $EnvPath)) {
@@ -44,11 +82,23 @@ if ($Action -eq 'Disable') {
     exit 0
 }
 
-$secureToken = Read-Host 'Dan Page Access Token cua Fanpage Thu Ha Authentic roi nhan Enter' -AsSecureString
-$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+$secureToken = $null
+$bstr = [IntPtr]::Zero
 $plainToken = $null
 try {
-    $plainToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    if ($UseExistingToken) {
+        $plainToken = Get-EnvValue -Lines $lines -Key 'META_PAGE_ACCESS_TOKEN'
+        if ([string]::IsNullOrWhiteSpace($plainToken)) {
+            throw 'META_PAGE_ACCESS_TOKEN_NOT_FOUND_IN_ENV'
+        }
+        Write-Host 'META_PAGE_ACCESS_TOKEN=USING_EXISTING_LOCAL_VALUE'
+    }
+    else {
+        $secureToken = Read-Host 'Dan Page Access Token cua Fanpage Thu Ha Authentic roi nhan Enter' -AsSecureString
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+        $plainToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    }
+
     if ([string]::IsNullOrWhiteSpace($plainToken)) {
         throw 'META_PAGE_ACCESS_TOKEN_EMPTY'
     }
@@ -71,10 +121,11 @@ export PYTHONPATH=/opt/data/tha-integrations:/opt/data/tha-integrations/.vendor
 python -m integrations.hermes.meta_outbound_sender --verify-token
 '@ -replace "`r`n", "`n"
 
-    $output = docker exec $ContainerName /bin/sh -c $verifyCommand 2>&1
-    $exitCode = $LASTEXITCODE
-    $output | ForEach-Object { Write-Host $_ }
-    if ($exitCode -ne 0) {
+    $result = Invoke-NativeCapture -FilePath 'docker' -Arguments @(
+        'exec', $ContainerName, '/bin/sh', '-c', $verifyCommand
+    )
+    $result.Output | ForEach-Object { Write-Host $_ }
+    if ($result.ExitCode -ne 0) {
         Copy-Item $backupPath $EnvPath -Force
         throw 'Page Access Token verification failed. Previous .env was restored.'
     }
