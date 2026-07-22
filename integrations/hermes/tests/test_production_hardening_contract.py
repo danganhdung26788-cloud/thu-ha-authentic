@@ -8,13 +8,21 @@ class ProductionHardeningContractTests(unittest.TestCase):
     def read(self, name: str) -> str:
         return (ROOT / name).read_text(encoding="utf-8")
 
-    def test_fanpage_background_runner_is_draft_only_and_locked(self):
+    def test_fanpage_background_runner_is_locked_and_uses_natural_pipeline(self):
         text = self.read("run_fanpage_draft_background.ps1")
         self.assertIn("Global\\HermesThuHaFanpageDraftProcessor", text)
-        self.assertIn("THA_FANPAGE_DRAFT_DRY_RUN=false", text)
-        self.assertIn("fanpage_draft_processor", text)
-        self.assertIn("auto_send=FALSE", text)
+        self.assertIn("THA_NATURAL_REPLY_DRY_RUN=false", text)
+        self.assertIn("natural_reply_processor", text)
+        self.assertIn("meta_outbound_sender", text)
         self.assertNotIn("graph.facebook.com", text)
+
+    def test_meta_sender_is_explicitly_gated_and_deduplicated_by_status(self):
+        text = self.read("meta_outbound_sender.py")
+        self.assertIn('REPLY_MODE != "NATURAL_AUTO_REPLY"', text)
+        self.assertIn("not AUTO_SEND", text)
+        self.assertIn('STATUS", "")).strip().upper() != "DRAFT_READY"', text)
+        self.assertIn('repo.set_status(row_number, "SENDING")', text)
+        self.assertIn("THA_META_AUTO_SEND_SINCE", text)
 
     def test_fanpage_scheduled_task_ignores_overlap(self):
         text = self.read("install_fanpage_draft_scheduled_task.ps1")
