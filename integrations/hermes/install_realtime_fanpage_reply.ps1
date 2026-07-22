@@ -138,20 +138,19 @@ if ($health.hermes_home -ne '/opt/data') {
     throw "Unexpected Hermes home in Meta bridge: $($health.hermes_home)"
 }
 
-# Real provider smoke test. Source provider credentials, then force the binary path
-# resolved from the running gateway so stale .env values cannot override it.
+# The sidecar already receives the validated environment through docker --env-file.
+# Re-sourcing the Windows-managed .env inside /bin/sh can create a false-negative
+# because of line endings or shell-incompatible values, even when Hermes itself works.
 $smokeScript = @'
 set -eu
-if [ -f /opt/data/.env ]; then
-  set -a
-  . /opt/data/.env
-  set +a
-fi
 export HERMES_HOME="${HERMES_HOME:-/opt/data}"
 export THA_HERMES_BIN="$THA_RESOLVED_HERMES_BIN"
 test -x "$THA_HERMES_BIN"
-result="$("$THA_HERMES_BIN" -z 'Trả lời duy nhất một từ: OK' 2>/tmp/tha-hermes-realtime-smoke.err)"
+rm -f /tmp/tha-hermes-realtime-smoke.out /tmp/tha-hermes-realtime-smoke.err
+result="$("$THA_HERMES_BIN" -z 'Reply with exactly one word: OK' 2>/tmp/tha-hermes-realtime-smoke.err)"
+printf '%s\n' "$result" >/tmp/tha-hermes-realtime-smoke.out
 test -n "$result"
+printf '%s\n' "$result"
 '@ -replace "`r`n", "`n"
 
 $smoke = Invoke-NativeCapture -FilePath 'docker' -Arguments @(
@@ -160,7 +159,7 @@ $smoke = Invoke-NativeCapture -FilePath 'docker' -Arguments @(
 if ($smoke.ExitCode -ne 0) {
     $diagnostic = Invoke-NativeCapture -FilePath 'docker' -Arguments @(
         'exec', $MetaContainerName, '/bin/sh', '-c',
-        'echo "HERMES_BIN=$THA_HERMES_BIN"; ls -l "$THA_HERMES_BIN" 2>/dev/null || true; tail -c 1000 /tmp/tha-hermes-realtime-smoke.err 2>/dev/null || true'
+        'echo "HERMES_BIN=$THA_HERMES_BIN"; ls -l "$THA_HERMES_BIN" 2>/dev/null || true; echo "--- STDOUT ---"; head -c 1000 /tmp/tha-hermes-realtime-smoke.out 2>/dev/null || true; echo; echo "--- STDERR ---"; head -c 2000 /tmp/tha-hermes-realtime-smoke.err 2>/dev/null || true'
     )
     Write-Host 'HERMES_RUNTIME_SMOKE=FAILED' -ForegroundColor Red
     foreach ($line in $diagnostic.Output) {
@@ -171,6 +170,8 @@ if ($smoke.ExitCode -ne 0) {
     docker restart $MetaContainerName | Out-Null
     throw 'Hermes live runtime failed. Auto-send was disabled to prevent canned replies.'
 }
+
+$smokeOutput = @($smoke.Output | ForEach-Object { "$($_)".Trim() } | Where-Object { $_ }) | Select-Object -First 1
 
 $task = Get-ScheduledTask -TaskName $FallbackTaskName -ErrorAction SilentlyContinue
 if ($null -eq $task) {
@@ -205,6 +206,7 @@ Write-Host "HERMES_HOME=$($health.hermes_home)"
 Write-Host "HERMES_BIN=$HermesBin"
 Write-Host "PYTHON_BIN=$PythonBin"
 Write-Host 'HERMES_RUNTIME_SMOKE=PASS'
+Write-Host "HERMES_RUNTIME_SMOKE_OUTPUT=$smokeOutput"
 Write-Host "FALLBACK_TASK_STATE=$($task.State)"
 Write-Host "FALLBACK_LAST_RESULT=$($taskInfo.LastTaskResult)"
 Write-Host 'PRICE_AWARE_RECOMMENDATION=ENABLED'
