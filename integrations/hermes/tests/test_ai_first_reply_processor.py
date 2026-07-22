@@ -65,78 +65,56 @@ class FakeRepo:
         self.updated.append((row_number, decision))
 
 
-class AiFirstReplyProcessorTests(unittest.TestCase):
-    def test_extract_json_from_fence(self):
-        payload = processor.extract_json_object(
-            '```json\n{"action":"LOOKUP","lookup_type":"USAGE"}\n```'
-        )
-        self.assertEqual(payload["action"], "LOOKUP")
+class ConversationNativeProcessorTests(unittest.TestCase):
+    def product_values(self):
+        header = list(PRODUCTS[0].keys())
+        return [header] + [
+            [str(product.get(key, "")) for key in header] for product in PRODUCTS
+        ]
 
-    def test_parse_plan_keeps_exact_product_reference(self):
-        plan = processor.parse_plan(
-            {
-                "action": "LOOKUP",
-                "lookup_type": "USAGE",
-                "product_refs": ["KCN Eucerin Kiềm Dầu & Ngừa Mụn 50ml"],
-                "intent": "BASIC_USAGE",
-                "confidence": 0.94,
-            }
+    def test_greeting_does_not_reset_or_require_tool(self):
+        self.assertFalse(processor.is_conversation_reset("xin chào"))
+        text, request = processor.split_natural_response(
+            "Dạ em chào chị ạ 😊 Chị cần em hỗ trợ gì hôm nay?"
         )
-        self.assertEqual(plan.action, "LOOKUP")
-        self.assertEqual(plan.product_refs[0], "KCN Eucerin Kiềm Dầu & Ngừa Mụn 50ml")
+        self.assertIn("chào chị", text)
+        self.assertIsNone(request)
+
+    def test_tool_marker_is_optional_and_hidden(self):
+        raw = (
+            "Dạ để em kiểm tra đúng giá cho chị nhé.\n"
+            '[[THA_TOOL:{"name":"PRODUCT_FACTS","lookup_type":"PRICE",'
+            '"product_refs":["KCN Eucerin Kiềm Dầu & Ngừa Mụn 50ml"]}]]'
+        )
+        text, request = processor.split_natural_response(raw)
+        self.assertNotIn("THA_TOOL", text)
+        self.assertEqual(request.name, "PRODUCT_FACTS")
+        self.assertEqual(request.lookup_type, "PRICE")
+
+    def test_malformed_tool_marker_keeps_natural_text(self):
+        text, request = processor.split_natural_response(
+            "Dạ chị nói thêm giúp em nhé.\n[[THA_TOOL:{không hợp lệ}]]"
+        )
+        self.assertEqual(text, "Dạ chị nói thêm giúp em nhé.")
+        self.assertIsNone(request)
 
     def test_generic_attribute_never_resolves_catalog_product(self):
         selected = processor.resolve_product_refs(["kiềm dầu"], PRODUCTS)
         self.assertEqual(selected, [])
 
-    def test_exact_context_reference_resolves_only_eucerin(self):
+    def test_exact_reference_resolves_eucerin_only(self):
         selected = processor.resolve_product_refs(
             ["KCN Eucerin Kiềm Dầu & Ngừa Mụn 50ml"], PRODUCTS
         )
         self.assertEqual([item["product_id"] for item in selected], ["P000137"])
-        self.assertNotIn("P000555", [item["product_id"] for item in selected])
 
-    def test_new_consultation_resets_corrupted_old_context(self):
-        rows = [
-            {
-                "CUSTOMER_ID": "C1",
-                "MESSAGE_TEXT": "lại kiềm dầu đi",
-                "DRAFT_REPLY": "KCN Beplain Sunmuse Vật Lý kiềm dầu",
-            },
-            {
-                "CUSTOMER_ID": "C1",
-                "MESSAGE_TEXT": "TEST CONTEXT SAFE 009 Da chị dầu, shop tư vấn giúp chị",
-                "DRAFT_REPLY": "KCN Eucerin Kiềm Dầu & Ngừa Mụn 50ml phù hợp hơn.",
-                "INTENT": "PRODUCT_CONSULTATION",
-                "CONFIDENCE": "0.82",
-                "NEED_HUMAN": "FALSE",
-            },
-            {
-                "CUSTOMER_ID": "C1",
-                "MESSAGE_TEXT": "cách dùng như nào em nhỉ",
-            },
-        ]
-        context = processor.conversation_context(rows, 2, "C1", rows[2]["MESSAGE_TEXT"])
-        self.assertEqual(len(context), 1)
-        self.assertIn("Eucerin", str(context[0]["assistant"]))
-        self.assertNotIn("Beplain", str(context))
+    def test_prompt_forbids_handoff_for_normal_uncertainty(self):
+        prompt = processor.build_conversation_prompt("xin chào", [])
+        self.assertIn("Không chuyển Thu Hà chỉ vì thiếu ngữ cảnh", prompt)
+        self.assertIn("Câu chào", prompt)
+        self.assertIn("Không dùng THA_TOOL cho câu chào", prompt)
 
-    def test_plan_prompt_explicitly_forbids_attribute_catalog_switch(self):
-        prompt = processor.build_plan_prompt(
-            "lại kiềm dầu đi",
-            [{"customer": "cách dùng như nào", "assistant": "KCN Eucerin..."}],
-        )
-        self.assertIn("KHONG co nghia la tim mot san pham moi", prompt)
-        self.assertIn("Suy luan theo mach hoi thoai truoc", prompt)
-
-    def test_recommendation_candidates_use_need_not_generic_product_name(self):
-        selected = processor.retrieve_recommendation_candidates(
-            "da dầu mụn đầu đen lỗ chân lông bít tắc", PRODUCTS
-        )
-        ids = [item["product_id"] for item in selected]
-        self.assertIn("P000329", ids)
-
-    def test_lookup_process_uses_hermes_plan_then_verified_data(self):
+    def test_plain_greeting_processes_as_natural_conversation(self):
         queue = [
             [
                 "MESSAGE_ID", "CUSTOMER_ID", "CUSTOMER_NAME", "MESSAGE_TEXT",
@@ -144,45 +122,93 @@ class AiFirstReplyProcessorTests(unittest.TestCase):
                 "NEED_HUMAN", "STATUS", "CREATED_AT", "REPLIED_AT", "ERROR",
             ],
             [
-                "m1", "C1", "", "TEST CONTEXT SAFE 009 Da chị dầu, tư vấn giúp chị",
-                "PRODUCT_CONSULTATION", "P000137", "KCN Eucerin phù hợp.", "0.82",
-                "FALSE", "SENT", "2026-07-22T00:00:00+00:00", "", "",
+                "m1", "C1", "", "xin chào", "UNCLASSIFIED", "", "", "",
+                "FALSE", "NEW", "2026-07-22T00:00:00+00:00", "", "",
+            ],
+        ]
+        repo = FakeRepo(queue, self.product_values())
+        with (
+            patch.object(processor, "DRY_RUN", False),
+            patch.object(
+                processor,
+                "call_conversation",
+                return_value=("Dạ em chào chị ạ 😊 Chị cần em hỗ trợ gì?", None),
+            ),
+        ):
+            eligible, processed, fallbacks = processor.process_new_messages(repo)
+        self.assertEqual((eligible, processed, fallbacks), (1, 1, 0))
+        decision = repo.updated[0][1]
+        self.assertEqual(decision.intent, "NATURAL_CONVERSATION")
+        self.assertFalse(decision.need_human)
+        self.assertNotIn("chuyển Thu Hà", decision.reply)
+
+    def test_normal_clarification_does_not_force_handoff(self):
+        queue = [
+            [
+                "MESSAGE_ID", "CUSTOMER_ID", "CUSTOMER_NAME", "MESSAGE_TEXT",
+                "INTENT", "PRODUCT_KEY", "DRAFT_REPLY", "CONFIDENCE",
+                "NEED_HUMAN", "STATUS", "CREATED_AT", "REPLIED_AT", "ERROR",
             ],
             [
-                "m2", "C1", "", "cách dùng như nào e nhỉ", "UNCLASSIFIED", "",
-                "", "", "FALSE", "NEW", "2026-07-22T00:01:00+00:00", "", "",
+                "m1", "C1", "", "đây chỉ là một câu hỏi bình thường thôi",
+                "UNCLASSIFIED", "", "", "", "FALSE", "NEW",
+                "2026-07-22T00:00:00+00:00", "", "",
             ],
         ]
-        product_header = list(PRODUCTS[0].keys())
-        product_values = [product_header] + [
-            [str(product.get(key, "")) for key in product_header] for product in PRODUCTS
+        repo = FakeRepo(queue, self.product_values())
+        with (
+            patch.object(processor, "DRY_RUN", False),
+            patch.object(
+                processor,
+                "call_conversation",
+                return_value=("Dạ vâng ạ, chị cứ hỏi tự nhiên nhé 😊", None),
+            ),
+        ):
+            processor.process_new_messages(repo)
+        decision = repo.updated[0][1]
+        self.assertFalse(decision.need_human)
+        self.assertIn("cứ hỏi tự nhiên", decision.reply)
+
+    def test_verified_lookup_occurs_only_after_hermes_requests_it(self):
+        queue = [
+            [
+                "MESSAGE_ID", "CUSTOMER_ID", "CUSTOMER_NAME", "MESSAGE_TEXT",
+                "INTENT", "PRODUCT_KEY", "DRAFT_REPLY", "CONFIDENCE",
+                "NEED_HUMAN", "STATUS", "CREATED_AT", "REPLIED_AT", "ERROR",
+            ],
+            [
+                "m1", "C1", "", "KCN Eucerin dùng như nào?", "UNCLASSIFIED",
+                "", "", "", "FALSE", "NEW", "2026-07-22T00:00:00+00:00", "", "",
+            ],
         ]
-        repo = FakeRepo(queue, product_values)
-        plan = processor.ConversationPlan(
-            action="LOOKUP",
+        repo = FakeRepo(queue, self.product_values())
+        request = processor.ToolRequest(
+            name="PRODUCT_FACTS",
             lookup_type="USAGE",
             product_refs=("KCN Eucerin Kiềm Dầu & Ngừa Mụn 50ml",),
-            search_query="",
-            reply="",
-            intent="BASIC_USAGE",
-            need_human=False,
-            confidence=0.95,
         )
         with (
             patch.object(processor, "DRY_RUN", False),
-            patch.object(processor, "call_plan", return_value=plan),
             patch.object(
                 processor,
-                "compose_lookup_reply",
-                return_value=("Dạ, chị thoa ở bước cuối buổi sáng ạ.", ""),
+                "call_conversation",
+                return_value=("Dạ để em kiểm tra đúng cách dùng nhé.", request),
+            ),
+            patch.object(
+                processor,
+                "compose_grounded_reply",
+                return_value="Dạ chị thoa ở bước cuối chu trình buổi sáng ạ.",
             ),
         ):
             eligible, processed, fallbacks = processor.process_new_messages(repo)
         self.assertEqual((eligible, processed, fallbacks), (1, 1, 0))
         decision = repo.updated[0][1]
         self.assertEqual(decision.product_key, "P000137")
-        self.assertNotIn("P000555", decision.product_key)
         self.assertIn("bước cuối", decision.reply)
+
+    def test_hermes_failure_greeting_fallback_is_not_handoff(self):
+        self.assertIn("chào chị", processor.natural_failure_fallback("xin chào"))
+        self.assertNotIn("chuyển Thu Hà", processor.natural_failure_fallback("xin chào"))
 
 
 if __name__ == "__main__":
