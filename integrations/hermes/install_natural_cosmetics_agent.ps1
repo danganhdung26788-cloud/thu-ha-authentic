@@ -138,17 +138,18 @@ if [ -f /opt/data/.env ]; then
   . /opt/data/.env
   set +a
 fi
-export HERMES_HOME=/opt/data
+export HERMES_HOME="${HERMES_HOME:-/opt/data}"
 export GOOGLE_APPLICATION_CREDENTIALS=/opt/data/google/application_default_credentials.json
 export PYTHONPATH=/opt/data/tha-integrations:/opt/data/tha-integrations/.vendor
 cd /opt/data/tha-integrations
+python -m unittest -v integrations.hermes.tests.test_conversation_runtime_processor
 python -m unittest -v integrations.hermes.tests.test_ai_first_reply_processor
 python -m unittest -v integrations.hermes.tests.test_natural_reply_processor
 python -m unittest -v integrations.hermes.tests.test_context_safety_regression
 python -m unittest -v integrations.hermes.tests.test_cosmetics_training_store
 python -m unittest -v integrations.hermes.tests.test_meta_outbound_sender
 hermes skills list | grep -i 'thu-ha-cosmetics'
-THA_AI_FIRST_DRY_RUN=true python -m integrations.hermes.ai_first_reply_processor
+THA_AI_FIRST_DRY_RUN=true python -m integrations.hermes.conversation_runtime_processor
 python -m integrations.hermes.meta_outbound_sender
 '@ -replace "`r`n", "`n"
 
@@ -165,9 +166,9 @@ Write-Host "SKILL_PATH=$SkillDestination"
 Write-Host "MEMORY_PATH=$MemoryPath"
 Write-Host "USER_PATH=$UserPath"
 Write-Host "TRAINING_PATH=$TrainingRoot"
-Write-Host 'PROCESSOR=HERMES_AI_FIRST_ON_DEMAND_LOOKUP'
-Write-Host 'REASONING_MODE=HERMES_AI_FIRST'
-Write-Host 'FACTUAL_LOOKUP=ON_DEMAND'
-Write-Host 'CONTEXT_GUARD=VALIDATION_ONLY'
-Write-Host 'GENERIC_ATTRIBUTE_PRODUCT_SWITCH=DISABLED'
+Write-Host 'PROCESSOR=HERMES_CONVERSATION_RUNTIME'
+Write-Host 'REASONING_MODE=NATURAL_CONVERSATION'
+Write-Host 'FACTUAL_LOOKUP=ON_DEMAND_WITH_PRICE'
+Write-Host 'HERMES_HOME=/opt/data'
+Write-Host 'GENERIC_FALLBACK_LOOP=DISABLED'
 Write-Host 'AUTO_SEND=UNCHANGED'
