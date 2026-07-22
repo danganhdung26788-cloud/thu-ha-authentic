@@ -81,12 +81,14 @@ fi
 export HERMES_HOME=/opt/data
 export GOOGLE_APPLICATION_CREDENTIALS=/opt/data/google/application_default_credentials.json
 export PYTHONPATH=/opt/data/tha-integrations:/opt/data/tha-integrations/.vendor
+export THA_CONTEXT_GUARD_DRY_RUN=false
 export THA_NATURAL_REPLY_DRY_RUN=false
+python -m integrations.hermes.safe_context_processor
 python -m integrations.hermes.natural_reply_processor
 python -m integrations.hermes.meta_outbound_sender
 '@ -replace "`r`n", "`n"
 
-    Write-HostLog "START container=$ContainerName processor=NATURAL_SKILL_DRIVEN"
+    Write-HostLog "START container=$ContainerName processor=SAFE_CONTEXT_THEN_NATURAL"
     $result = Invoke-NativeCapture -FilePath 'docker' -Arguments @(
         'exec', $ContainerName, '/bin/sh', '-c', $shellCommand
     )
@@ -101,7 +103,7 @@ python -m integrations.hermes.meta_outbound_sender
         throw "Natural reply pipeline exited with code $($result.ExitCode)"
     }
 
-    Write-HostLog "PASS Natural reply pipeline completed"
+    Write-HostLog "PASS Safe context and natural reply pipeline completed"
     exit 0
 }
 catch {
