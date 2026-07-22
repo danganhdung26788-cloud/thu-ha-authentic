@@ -139,6 +139,7 @@ if [ -f /opt/data/.env ]; then
   set +a
 fi
 export HERMES_HOME="${HERMES_HOME:-/opt/data}"
+export THA_HERMES_BIN="${THA_HERMES_BIN:-/opt/hermes/.venv/bin/hermes}"
 export GOOGLE_APPLICATION_CREDENTIALS=/opt/data/google/application_default_credentials.json
 export PYTHONPATH=/opt/data/tha-integrations:/opt/data/tha-integrations/.vendor
 cd /opt/data/tha-integrations
@@ -148,7 +149,8 @@ python -m unittest -v integrations.hermes.tests.test_natural_reply_processor
 python -m unittest -v integrations.hermes.tests.test_context_safety_regression
 python -m unittest -v integrations.hermes.tests.test_cosmetics_training_store
 python -m unittest -v integrations.hermes.tests.test_meta_outbound_sender
-hermes skills list | grep -i 'thu-ha-cosmetics'
+test -x "$THA_HERMES_BIN"
+"$THA_HERMES_BIN" skills list | grep -i 'thu-ha-cosmetics'
 THA_AI_FIRST_DRY_RUN=true python -m integrations.hermes.conversation_runtime_processor
 python -m integrations.hermes.meta_outbound_sender
 '@ -replace "`r`n", "`n"
@@ -170,5 +172,6 @@ Write-Host 'PROCESSOR=HERMES_CONVERSATION_RUNTIME'
 Write-Host 'REASONING_MODE=NATURAL_CONVERSATION'
 Write-Host 'FACTUAL_LOOKUP=ON_DEMAND_WITH_PRICE'
 Write-Host 'HERMES_HOME=/opt/data'
+Write-Host 'HERMES_BIN=/opt/hermes/.venv/bin/hermes'
 Write-Host 'GENERIC_FALLBACK_LOOP=DISABLED'
 Write-Host 'AUTO_SEND=UNCHANGED'
