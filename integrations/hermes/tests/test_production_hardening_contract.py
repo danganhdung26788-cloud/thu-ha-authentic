@@ -75,7 +75,7 @@ class ProductionHardeningContractTests(unittest.TestCase):
         self.assertNotIn("TELEGRAM_BOT_TOKEN=", text)
         self.assertNotIn("/opt/hermes/.venv/bin/hermes", text)
 
-    def test_realtime_installer_resolves_binary_and_requires_live_smoke(self):
+    def test_realtime_installer_reuses_sidecar_environment_for_live_smoke(self):
         text = self.read("install_realtime_fanpage_reply.ps1")
         self.assertIn("install_natural_cosmetics_agent.ps1", text)
         self.assertIn("recreate_meta_bridge_sidecar.ps1", text)
@@ -88,11 +88,14 @@ class ProductionHardeningContractTests(unittest.TestCase):
         self.assertIn("HERMES_CONVERSATION_RUNTIME", text)
         self.assertIn("ON_DEMAND_WITH_PRICE", text)
         self.assertIn("HERMES_RUNTIME_SMOKE=PASS", text)
-        self.assertIn("Trả lời duy nhất một từ: OK", text)
+        self.assertIn("Reply with exactly one word: OK", text)
         self.assertIn("THA_RESOLVED_HERMES_BIN", text)
+        self.assertIn("HERMES_RUNTIME_SMOKE_OUTPUT", text)
+        self.assertIn("tha-hermes-realtime-smoke.out", text)
         self.assertIn("THA_REPLY_MODE' -Value 'DRAFT_ONLY", text)
         self.assertIn("THA_META_AUTO_SEND' -Value 'false", text)
         self.assertIn("META_SIDECAR_ONLY=TRUE", text)
+        self.assertNotIn(". /opt/data/.env", text)
         self.assertNotIn("META_PAGE_ACCESS_TOKEN", text)
         self.assertNotIn("/opt/hermes/.venv/bin/hermes", text)
 
