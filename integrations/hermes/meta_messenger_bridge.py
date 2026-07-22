@@ -1,8 +1,8 @@
-"""Direct Meta Messenger webhook adapter for Thu Hà Authentic.
+"""Direct Meta Messenger webhook adapter for Thu Ha Authentic.
 
 Verified text messages are written to FANPAGE_QUEUE. The bridge then starts the
-safe context guard, natural-reply processor and Meta sender immediately in a
-serialized background worker. The Windows Scheduled Task remains a fallback.
+Hermes AI-first conversation processor and Meta sender immediately in a serialized
+background worker. The Windows Scheduled Task remains a fallback.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from google.auth import default as google_auth_default
 from googleapiclient.discovery import build
 
 LOGGER = logging.getLogger("tha_meta_messenger_bridge")
-app = FastAPI(title="Thu Hà Authentic Meta Messenger Bridge", version="1.2.0")
+app = FastAPI(title="Thu Ha Authentic Meta Messenger Bridge", version="1.3.0")
 
 
 def now_iso() -> str:
@@ -151,37 +151,24 @@ def load_runtime_env(path: Path = ENV_PATH) -> dict[str, str]:
 
 
 def run_realtime_pipeline() -> None:
-    """Guard context, generate remaining replies, then send; task is retry path."""
+    """Let Hermes reason first, retrieve facts on demand, then send."""
     with PIPELINE_LOCK:
         load_runtime_env()
-        os.environ["THA_CONTEXT_GUARD_DRY_RUN"] = "false"
-        os.environ["THA_NATURAL_REPLY_DRY_RUN"] = "false"
-
-        guard = importlib.import_module(
-            "integrations.hermes.safe_context_processor"
-        )
-        guard = importlib.reload(guard)
-        guard_repo = guard.SheetsRepository(guard.FAST_INDEX_ID)
-        guard_eligible, guard_processed = guard.process_new_messages(guard_repo)
-        LOGGER.info(
-            "Realtime context guard eligible=%s processed=%s",
-            guard_eligible,
-            guard_processed,
-        )
+        os.environ["THA_AI_FIRST_DRY_RUN"] = "false"
 
         processor = importlib.import_module(
-            "integrations.hermes.natural_reply_processor"
+            "integrations.hermes.ai_first_reply_processor"
         )
         processor = importlib.reload(processor)
         processor_repo = processor.SheetsRepository(processor.FAST_INDEX_ID)
         eligible, processed, fallbacks = processor.process_new_messages(processor_repo)
         LOGGER.info(
-            "Realtime natural reply eligible=%s processed=%s fallbacks=%s",
+            "Realtime Hermes AI-first eligible=%s processed=%s fallbacks=%s",
             eligible,
             processed,
             fallbacks,
         )
-        if guard_processed + processed == 0:
+        if processed == 0:
             return
 
         sender = importlib.import_module("integrations.hermes.meta_outbound_sender")
@@ -302,6 +289,8 @@ def health() -> dict[str, str]:
         "status": "ok",
         "mode": "REALTIME_NATURAL_AUTO_REPLY" if active else "DRAFT_ONLY_INGEST",
         "scheduled_fallback": "enabled",
-        "context_guard": "enabled",
+        "reasoning_mode": "HERMES_AI_FIRST",
+        "factual_lookup": "ON_DEMAND",
+        "context_guard": "validation_only",
         "fanpage_queue_id": FAST_INDEX_ID,
     }
