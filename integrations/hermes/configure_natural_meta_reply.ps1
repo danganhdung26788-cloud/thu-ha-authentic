@@ -25,7 +25,7 @@ function Set-EnvValue {
         [string]$Key,
         [string]$Value
     )
-    $prefixPattern = '^' + [regex]::Escape($Key) + '='
+    $prefixPattern = '^\s*(?:export\s+)?' + [regex]::Escape($Key) + '\s*='
     $filtered = @($Lines | Where-Object {
         (Normalize-EnvLine -Line $_) -notmatch $prefixPattern
     })
@@ -38,12 +38,21 @@ function Get-EnvValue {
         [string[]]$Lines,
         [string]$Key
     )
-    $prefix = "$Key="
+    $pattern = '^\s*(?:export\s+)?' + [regex]::Escape($Key) + '\s*=\s*(.*)\s*$'
     $value = $null
     foreach ($rawLine in @($Lines)) {
         $line = Normalize-EnvLine -Line $rawLine
-        if ($line.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
-            $value = $line.Substring($prefix.Length)
+        $match = [regex]::Match($line, $pattern)
+        if ($match.Success) {
+            $candidate = $match.Groups[1].Value.Trim()
+            if ($candidate.Length -ge 2) {
+                $first = $candidate.Substring(0, 1)
+                $last = $candidate.Substring($candidate.Length - 1, 1)
+                if (($first -eq '"' -and $last -eq '"') -or ($first -eq "'" -and $last -eq "'")) {
+                    $candidate = $candidate.Substring(1, $candidate.Length - 2)
+                }
+            }
+            $value = $candidate
         }
     }
     if ($null -eq $value) {
@@ -74,6 +83,14 @@ function Invoke-NativeCapture {
         Output = $output
         ExitCode = $exitCode
     }
+}
+
+function Get-CapturedText {
+    param($Result)
+    if ($null -eq $Result) {
+        return ''
+    }
+    return (($Result.Output | ForEach-Object { "$_" }) -join '').Trim()
 }
 
 if (-not (Test-Path $EnvPath)) {
@@ -116,11 +133,36 @@ try {
             if ($tokenResult.ExitCode -ne 0) {
                 throw 'META_PAGE_ACCESS_TOKEN_CONTAINER_READ_FAILED'
             }
-            $plainToken = (($tokenResult.Output | ForEach-Object { "$_" }) -join '').Trim()
-            if ([string]::IsNullOrWhiteSpace($plainToken)) {
-                throw 'META_PAGE_ACCESS_TOKEN_NOT_FOUND_IN_ENV_OR_CONTAINER'
+            $plainToken = Get-CapturedText -Result $tokenResult
+            if (-not [string]::IsNullOrWhiteSpace($plainToken)) {
+                $tokenSource = 'RUNNING_CONTAINER_ENV'
             }
-            $tokenSource = 'RUNNING_CONTAINER_ENV'
+        }
+
+        if ([string]::IsNullOrWhiteSpace($plainToken)) {
+            $dataEnvCommand = @'
+set -eu
+if [ -f /opt/data/.env ]; then
+  set -a
+  . /opt/data/.env
+  set +a
+fi
+printf %s "${META_PAGE_ACCESS_TOKEN:-}"
+'@ -replace "`r`n", "`n"
+            $dataEnvResult = Invoke-NativeCapture -FilePath 'docker' -Arguments @(
+                'exec', $ContainerName, '/bin/sh', '-c', $dataEnvCommand
+            )
+            if ($dataEnvResult.ExitCode -ne 0) {
+                throw 'META_PAGE_ACCESS_TOKEN_DATA_ENV_READ_FAILED'
+            }
+            $plainToken = Get-CapturedText -Result $dataEnvResult
+            if (-not [string]::IsNullOrWhiteSpace($plainToken)) {
+                $tokenSource = 'RUNNING_CONTAINER_DATA_ENV'
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($plainToken)) {
+            throw 'META_PAGE_ACCESS_TOKEN_NOT_FOUND_IN_LOCAL_ENV_CONTAINER_ENV_OR_DATA_ENV'
         }
         Write-Host "META_PAGE_ACCESS_TOKEN=USING_EXISTING_$tokenSource"
     }
