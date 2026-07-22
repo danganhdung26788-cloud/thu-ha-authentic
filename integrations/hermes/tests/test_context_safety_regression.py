@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from integrations.hermes import natural_reply_processor as processor
+from integrations.hermes import safe_context_processor as processor
 
 
 PRODUCTS = [
@@ -43,11 +43,11 @@ class ContextSafetyRegressionTests(unittest.TestCase):
                 "MESSAGE_TEXT": "Da chị dầu và hay mụn ẩn",
                 "PRODUCT_KEY": "P000137,P000329",
                 "DRAFT_REPLY": "Shop gợi ý KCN Eucerin và Jumiso Blackhead Melting Softener.",
+                "CONFIDENCE": "0.82",
+                "NEED_HUMAN": "FALSE",
             }
         ]
-        selected = processor.select_products(
-            "sản phẩm em vừa giới thiệu ở trên ấy", PRODUCTS, context=context
-        )
+        selected = processor.resolve_context_products(context, PRODUCTS)
         self.assertEqual(
             [item["product_id"] for item in selected],
             ["P000137", "P000329"],
@@ -55,7 +55,13 @@ class ContextSafetyRegressionTests(unittest.TestCase):
         self.assertNotIn("P000018", [item["product_id"] for item in selected])
 
     def test_context_product_keys_support_multiple_products(self):
-        context = [{"PRODUCT_KEY": "P000137,P000329"}]
+        context = [
+            {
+                "PRODUCT_KEY": "P000137,P000329",
+                "CONFIDENCE": "0.90",
+                "NEED_HUMAN": "FALSE",
+            }
+        ]
         selected = processor.resolve_context_products(context, PRODUCTS)
         self.assertEqual(
             [item["product_id"] for item in selected],
@@ -81,8 +87,31 @@ class ContextSafetyRegressionTests(unittest.TestCase):
         self.assertTrue(processor.is_correction_or_dispute("trả lời sai rồi"))
 
     def test_generic_product_words_are_not_explicit_product_match(self):
-        selected = processor.select_products("sản phẩm này", PRODUCTS, context=[])
+        selected = processor.explicit_product_mentions("sản phẩm này", PRODUCTS)
         self.assertEqual(selected, [])
+
+    def test_low_confidence_corrupted_key_is_ignored(self):
+        context = [
+            {
+                "MESSAGE_TEXT": "sản phẩm em vừa giới thiệu",
+                "PRODUCT_KEY": "P000018",
+                "DRAFT_REPLY": "ETIAXIL",
+                "CONFIDENCE": "0.55",
+                "NEED_HUMAN": "TRUE",
+            },
+            {
+                "MESSAGE_TEXT": "Da chị dầu và hay mụn ẩn",
+                "PRODUCT_KEY": "P000137",
+                "DRAFT_REPLY": "Shop gợi ý KCN Eucerin và Jumiso Blackhead Melting Softener.",
+                "CONFIDENCE": "0.82",
+                "NEED_HUMAN": "FALSE",
+            },
+        ]
+        selected = processor.resolve_context_products(list(reversed(context)), PRODUCTS)
+        ids = [item["product_id"] for item in selected]
+        self.assertIn("P000137", ids)
+        self.assertIn("P000329", ids)
+        self.assertNotIn("P000018", ids)
 
 
 if __name__ == "__main__":
