@@ -1,16 +1,17 @@
 """Native-skill adapter for the fast grounded Thu Ha Messenger runtime.
 
 The proven product-selection core is preserved in conversation_runtime_core.py.
-This adapter removes custom training-memory injection and lets Hermes use its own
-persistent memory and progressive, on-demand skill system. Telegram corrections
-change the thu-ha-cosmetics skill; historical training records never enter each
-customer prompt.
+This adapter removes custom training-memory injection, lets Hermes use its own
+progressive skill system, and overlays product reads with the POS Web App
+`Products` source of truth. Historical training records never enter customer
+prompts.
 """
 from __future__ import annotations
 
 import json
 
 from integrations.hermes import conversation_runtime_core as _core
+from integrations.hermes.product_catalog import overlay_source_of_truth
 
 # Re-export the tested core API so existing callers and tests remain compatible.
 for _name in dir(_core):
@@ -44,6 +45,7 @@ NGUYÊN TẮC BẮT BUỘC:
 - Khi khách cần sản phẩm, giá, tồn kho hoặc cách dùng, phải dùng THA_TOOL; không được giả vờ đã tra kho.
 - Khi nhu cầu đã đủ rõ, chốt nhanh một sản phẩm; không hỏi đi hỏi lại ngân sách hoặc bắt khách chọn nhóm chung chung.
 - Sau khi đã chốt sản phẩm, chỉ tư vấn sâu thêm khi khách hỏi tiếp.
+- Tên, giá, tồn kho, công dụng và ảnh phải lấy từ bảng Products gốc của POS Web App Thu Hà Authentic.
 - Không chẩn đoán bệnh, không phóng đại công dụng.
 
 THA_TOOL:
@@ -78,7 +80,10 @@ def _sync_test_and_runtime_overrides() -> None:
 
 def process_new_messages(repo: SheetsRepository) -> tuple[int, int, int]:
     _sync_test_and_runtime_overrides()
-    return _core.process_new_messages(repo)
+    # Unit tests use lightweight fake repositories. The real Messenger runtime uses
+    # SheetsRepository and is overlaid with the POS Web App source of truth.
+    runtime_repo = overlay_source_of_truth(repo) if isinstance(repo, SheetsRepository) else repo
+    return _core.process_new_messages(runtime_repo)
 
 
 def main() -> int:
@@ -87,7 +92,8 @@ def main() -> int:
     print(
         "PASS Hermes native-skill fast-grounded runtime "
         f"eligible={eligible} processed={processed} "
-        f"fallbacks={fallbacks} dry_run={DRY_RUN}"
+        f"fallbacks={fallbacks} dry_run={DRY_RUN} "
+        "product_source=POS_WEBAPP_PRODUCTS_SOURCE_OF_TRUTH"
     )
     return 0
 
