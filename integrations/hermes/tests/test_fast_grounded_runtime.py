@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from integrations.hermes import conversation_runtime_processor as processor
@@ -159,17 +157,14 @@ class FastGroundedRuntimeTests(unittest.TestCase):
         self.assertIn("Mặt Nạ Banobagi", decision.reply)
         self.assertIn("Cấp ẩm", decision.reply)
 
-    def test_active_telegram_training_memory_is_injected_each_turn(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            memory_path = Path(temporary) / "THA_TRAINING_ACTIVE.md"
-            memory_path.write_text(
-                "Quy tắc: Chốt ngay một sản phẩm có tên và giá.\n",
-                encoding="utf-8",
-            )
-            with patch.object(processor, "ACTIVE_TRAINING_MEMORY_PATH", memory_path):
-                prompt = processor.build_conversation_prompt("tư vấn mặt nạ", [])
-        self.assertIn("TRAINING ĐANG CÓ HIỆU LỰC", prompt)
-        self.assertIn("Chốt ngay một sản phẩm có tên và giá", prompt)
+    def test_prompt_uses_native_skill_without_raw_training_or_manual_memory_dump(self):
+        prompt = processor.build_conversation_prompt("tư vấn mặt nạ", [])
+        self.assertIn("/thu-ha-cosmetics", prompt)
+        self.assertIn("Không chèn hoặc đọc lịch sử training thô", prompt)
+        self.assertNotIn("TRAINING ĐANG CÓ HIỆU LỰC", prompt)
+        self.assertNotIn("THA_TRAINING_ACTIVE", prompt)
+        self.assertNotIn("BỘ NHỚ CHUNG", prompt)
+        self.assertEqual(processor.read_active_training_memory(), "")
 
 
 if __name__ == "__main__":
