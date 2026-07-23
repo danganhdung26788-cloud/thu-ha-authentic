@@ -1,8 +1,9 @@
 """Direct Meta Messenger webhook adapter for Thu Ha Authentic.
 
 Verified text messages are written to FANPAGE_QUEUE. The bridge starts the reliable
-Hermes conversation runtime and Meta sender immediately in one serialized worker.
-The Windows Scheduled Task remains a fallback.
+Hermes conversation runtime in one serialized worker. In Telegram approval mode,
+the prepared draft is pushed to the configured operator topic and is not sent to
+the customer until an operator explicitly approves it.
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ from google.auth import default as google_auth_default
 from googleapiclient.discovery import build
 
 LOGGER = logging.getLogger("tha_meta_messenger_bridge")
-app = FastAPI(title="Thu Ha Authentic Meta Messenger Bridge", version="1.4.0")
+app = FastAPI(title="Thu Ha Authentic Meta Messenger Bridge", version="1.5.0")
 
 
 def now_iso() -> str:
@@ -169,8 +170,12 @@ def load_runtime_env(path: Path = ENV_PATH) -> dict[str, str]:
     return _apply_runtime_defaults(loaded)
 
 
+def telegram_approval_mode() -> bool:
+    return os.getenv("THA_TELEGRAM_CONTROL_MODE", "").strip().upper() == "APPROVAL_REQUIRED"
+
+
 def run_realtime_pipeline() -> None:
-    """Run real Hermes conversation, retrieve verified facts on demand, then send."""
+    """Run Hermes reasoning and optionally auto-send when approval mode is disabled."""
     with PIPELINE_LOCK:
         load_runtime_env()
         os.environ["THA_AI_FIRST_DRY_RUN"] = "false"
@@ -188,6 +193,10 @@ def run_realtime_pipeline() -> None:
             fallbacks,
         )
         if processed == 0:
+            return
+
+        if telegram_approval_mode():
+            LOGGER.info("Realtime Meta sender held for Telegram operator approval")
             return
 
         sender = importlib.import_module("integrations.hermes.meta_outbound_sender")
@@ -224,6 +233,28 @@ def run_realtime_pipeline() -> None:
             raise RuntimeError(f"Realtime Meta sender failed={failed}")
 
 
+def notify_telegram_control(message_id: str) -> None:
+    """Push one prepared queue item to the configured Telegram operator topic."""
+    load_runtime_env()
+    target = os.getenv("THA_TELEGRAM_CONTROL_TARGET", "").strip()
+    if not target:
+        LOGGER.info("Telegram control notification skipped: target is not configured")
+        return
+    control = importlib.import_module(
+        "integrations.hermes.telegram_fanpage_control"
+    )
+    control = importlib.reload(control)
+    repo = control.SheetsRepository(control.FAST_INDEX_ID)
+    item = control.find_item(repo, message_id=message_id)
+    delivered = control.notify_item(item)
+    LOGGER.info(
+        "Telegram Fanpage control notification ticket=%s delivered=%s status=%s",
+        item.ticket,
+        delivered,
+        item.status,
+    )
+
+
 def ingest_message(message_id: str, sender_id: str, message_text: str) -> None:
     if DEDUPE.seen(message_id):
         return
@@ -238,6 +269,12 @@ def ingest_message(message_id: str, sender_id: str, message_text: str) -> None:
     except Exception:
         LOGGER.exception(
             "Realtime pipeline failed; Scheduled Task will retry queued messages"
+        )
+    try:
+        notify_telegram_control(message_id)
+    except Exception:
+        LOGGER.exception(
+            "Telegram control notification failed; queue item remains available"
         )
 
 
@@ -298,19 +335,34 @@ async def receive_webhook(
 @app.get("/health")
 def health() -> dict[str, str]:
     runtime = load_runtime_env()
+    approval = (
+        runtime.get(
+            "THA_TELEGRAM_CONTROL_MODE",
+            os.getenv("THA_TELEGRAM_CONTROL_MODE", ""),
+        ).upper()
+        == "APPROVAL_REQUIRED"
+    )
     active = (
         runtime.get("THA_REPLY_MODE", os.getenv("THA_REPLY_MODE", "DRAFT_ONLY")).upper()
         == "NATURAL_AUTO_REPLY"
         and runtime.get("THA_META_AUTO_SEND", os.getenv("THA_META_AUTO_SEND", "false")).lower()
         == "true"
+        and not approval
     )
     return {
         "status": "ok",
-        "mode": "REALTIME_NATURAL_AUTO_REPLY" if active else "DRAFT_ONLY_INGEST",
+        "mode": (
+            "TELEGRAM_APPROVAL_REQUIRED"
+            if approval
+            else "REALTIME_NATURAL_AUTO_REPLY"
+            if active
+            else "DRAFT_ONLY_INGEST"
+        ),
         "scheduled_fallback": "enabled",
         "reasoning_mode": "HERMES_CONVERSATION_RUNTIME",
         "factual_lookup": "ON_DEMAND_WITH_PRICE",
         "context_guard": "validation_only",
+        "telegram_control": "enabled" if runtime.get("THA_TELEGRAM_CONTROL_TARGET", "") else "disabled",
         "hermes_home": runtime.get("HERMES_HOME", "/opt/data"),
         "fanpage_queue_id": FAST_INDEX_ID,
     }
