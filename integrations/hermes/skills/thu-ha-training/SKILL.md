@@ -1,106 +1,129 @@
 ---
 name: thu-ha-training
-description: Ghi nhận trực tiếp bài học tư vấn Thu Hà Authentic từ Telegram, áp dụng ngay vào active memory có phiên bản và rollback.
-version: 1.0.0
+description: Dạy Hermes từ Telegram bằng cách tự cập nhật skill Thu Hà Cosmetics qua skill_manage; có snapshot, audit, kiểm tra và rollback nhưng không đưa lịch sử training vào prompt khách hàng.
+version: 2.0.0
 author: Thu Hà Authentic
 platforms: [linux]
 metadata:
   hermes:
-    tags: [telegram, training, memory, cosmetics, customer-service]
+    tags: [telegram, training, skills, self-improving, cosmetics]
     category: business
-    requires_toolsets: [terminal]
+    requires_toolsets: [skills, terminal]
 ---
 
-# Thu Hà Telegram Training
+# Thu Hà Telegram Skill Training
 
-## Khi sử dụng
-Chỉ dùng trong topic Telegram dành riêng cho training của **Đặng Anh Dũng** hoặc **Nông Thu Hà**.
-Không dùng skill này trong hội thoại với khách hàng.
-Mở chế độ training trong topic bằng lệnh **`/thu-ha-training`**.
+## Phạm vi
+Chỉ dùng trong topic Telegram training của **Đặng Anh Dũng** hoặc **Nông Thu Hà**. Không dùng skill này trong hội thoại với khách hàng.
 
-## Mục tiêu
-Biến bản sửa của người quản lý thành quy tắc đang có hiệu lực ngay từ lượt tư vấn tiếp theo, không phải sửa code cho từng lỗi.
+Mục tiêu là để Hermes tự cải thiện **skill thủ tục**, không tạo một danh sách memory ngày càng dài.
+
+## Nguyên tắc kiến trúc
+
+- Dùng `skill_view` để đọc đúng phần hiện hành của `thu-ha-cosmetics`.
+- Dùng `skill_manage patch` là lựa chọn mặc định; dùng `write_file` khi cần tạo reference mới.
+- Thay thế hoặc cô đọng quy tắc cũ; không nối nguyên văn mọi bản sửa.
+- Lịch sử, snapshot và audit nằm tại `/opt/data/training/thu-ha-cosmetics/skill-learning/` và không được tải vào prompt Messenger.
+- Không lưu giá, tồn kho, khuyến mại, tên khách, số điện thoại, địa chỉ hoặc dữ liệu cá nhân vào skill.
 
 ## Cách trainer nhắn
 
-### 1. Ghi nhớ một quy tắc
-Ví dụ:
+### Ghi một bài học
 
 ```text
-Nhớ: Khi khách đã nói rõ loại sản phẩm và nhu cầu thì chốt ngay 1 mẫu phù hợp nhất từ kho, nêu tên và giá. Chỉ tư vấn sâu thêm khi khách hỏi tiếp.
+Nhớ: Khi khách đã nói rõ loại sản phẩm và nhu cầu thì chốt ngay 1 mẫu phù hợp nhất từ kho, nêu tên và giá. Khách hỏi thêm thì mới tư vấn sâu.
 ```
 
-### 2. Sửa một kiểu trả lời sai
-Ví dụ:
+### Sửa cách trả lời
 
 ```text
 Sửa:
-Sai: Shop hỏi đi hỏi lại ngân sách và chỉ nói các nhóm sản phẩm chung chung.
-Đúng: Chốt ngay 1 sản phẩm có tên, giá và lý do ngắn.
+Sai: Hỏi lại ngân sách và chỉ nói các nhóm sản phẩm chung chung.
+Đúng: Chốt ngay một sản phẩm có tên, giá và lý do ngắn.
 Lý do: Khách cần quyết định nhanh.
 ```
 
-### 3. Hoàn tác bài học gần nhất
+### Xem thay đổi
 
 ```text
-Hoàn tác training gần nhất
+Xem skill đã học
 ```
 
-### 4. Xem các bài học đang hoạt động
+### Hoàn tác
 
 ```text
-Xem training đang hoạt động
+Hoàn tác lần học gần nhất
 ```
 
-## Quy trình bắt buộc
+## Quy trình bắt buộc khi áp dụng bài học
 
-1. Xác định trainer từ ngữ cảnh Telegram admin:
+1. Xác định trainer:
    - Đặng Anh Dũng → `DANG_ANH_DUNG`
    - Nông Thu Hà → `NONG_THU_HA`
-2. Tóm tắt bài học thành JSON với các trường:
-   - `trigger`: tình huống áp dụng.
-   - `rule`: quy tắc ngắn, rõ, dùng lặp lại.
-   - `bad_example`: câu hoặc hành vi cần tránh, có thể để trống.
-   - `good_example`: mẫu đúng, có thể để trống.
-   - `reason`: lý do, có thể để trống.
-3. Không lưu tên, số điện thoại, địa chỉ hoặc dữ liệu cá nhân của khách.
-4. Không lưu giá, tồn kho, số lượng hàng hoặc khuyến mại vào memory. Các dữ liệu này luôn phải tra từ Google Sheets.
-5. Ghi payload vào một tệp JSON tạm thời bằng công cụ ghi tệp, sau đó chạy:
+2. Tóm tắt nội dung sửa thành một quy tắc thủ tục ngắn, có trigger rõ ràng.
+3. Chọn đúng đích:
+   - tư vấn, chọn, chốt, giá, tồn kho, cách dùng → `references/sales-flow.md`;
+   - giọng điệu, độ dài, xưng hô, lặp câu → `references/tone-and-dialogue.md`;
+   - an toàn hoặc handoff → chỉ sửa `references/safety-and-handoff.md` khi trainer xác nhận rõ;
+   - quy trình mới hoàn toàn → tạo một reference tập trung, không mở rộng `SKILL.md` quá mức.
+4. Ghi lý do vào `/tmp/tha-skill-learning-reason.txt`.
+5. Chụp snapshot trước khi sửa:
 
 ```bash
 cd /opt/data/tha-integrations
-python -m integrations.hermes.telegram_training_memory apply \
+python -m integrations.hermes.telegram_skill_learning snapshot \
   --trainer DANG_ANH_DUNG \
-  --payload-file /tmp/tha-training-payload.json
+  --reason-file /tmp/tha-skill-learning-reason.txt
 ```
 
-6. Khi trainer yêu cầu hoàn tác, chạy:
+6. Lấy `transaction_id` từ kết quả.
+7. Dùng `skill_view("thu-ha-cosmetics", "references/<file>.md")` để đọc bản hiện hành.
+8. Dùng `skill_manage`:
+   - ưu tiên `patch` để thay quy tắc cũ hoặc bổ sung vào đúng mục;
+   - không append bản sửa nguyên văn;
+   - không tạo các mục `training-v...` trong skill;
+   - nếu quy tắc tương tự đã tồn tại, cập nhật quy tắc đó thay vì thêm bản mới.
+9. Kiểm tra và kích hoạt:
 
 ```bash
 cd /opt/data/tha-integrations
-python -m integrations.hermes.telegram_training_memory rollback \
+python -m integrations.hermes.telegram_skill_learning verify \
+  --trainer DANG_ANH_DUNG \
+  --transaction-id <TRANSACTION_ID>
+```
+
+10. Nếu verify thất bại, khôi phục đúng snapshot đang chờ:
+
+```bash
+cd /opt/data/tha-integrations
+python -m integrations.hermes.telegram_skill_learning abort \
+  --trainer DANG_ANH_DUNG \
+  --transaction-id <TRANSACTION_ID>
+```
+
+## Xem và hoàn tác
+
+Xem lịch sử kiểm toán, không tải nó vào hội thoại khách:
+
+```bash
+cd /opt/data/tha-integrations
+python -m integrations.hermes.telegram_skill_learning list
+```
+
+Hoàn tác skill về trước lần học đã kích hoạt gần nhất:
+
+```bash
+cd /opt/data/tha-integrations
+python -m integrations.hermes.telegram_skill_learning rollback \
   --trainer DANG_ANH_DUNG
 ```
 
-7. Khi trainer yêu cầu xem danh sách, chạy:
+## Phản hồi cho trainer
 
-```bash
-cd /opt/data/tha-integrations
-python -m integrations.hermes.telegram_training_memory list
-```
-
-## Phản hồi sau khi lưu
-Chỉ xác nhận ngắn gọn theo mẫu:
+Sau khi verify PASS, chỉ xác nhận ngắn:
 
 ```text
-Đã lưu training-v0001 và có hiệu lực từ lượt tư vấn tiếp theo.
+Đã cập nhật skill Thu Hà Cosmetics và có hiệu lực từ phiên tư vấn tiếp theo.
 ```
 
-Nếu dữ liệu training chưa rõ, chỉ hỏi tối đa một câu để làm rõ.
-Không giải thích dài dòng về cơ chế nội bộ.
-
-## Bảo vệ hệ thống
-- Chỉ chấp nhận trainer đã được phê duyệt.
-- Không ghi trực tiếp vào Google Sheets sản phẩm.
-- Mỗi bản ghi phải có version, audit và khả năng rollback.
-- Không tự suy diễn một câu nói của khách thành quy tắc chung.
+Nếu nội dung chưa đủ rõ, hỏi tối đa một câu. Không giải thích dài dòng về cơ chế nội bộ.
