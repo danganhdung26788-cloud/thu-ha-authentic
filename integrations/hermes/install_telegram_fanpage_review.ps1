@@ -4,7 +4,7 @@ param(
     [string]$GatewayContainer = 'hermes-gateway',
     [string]$DataRoot = 'D:\HermesAgent\data',
     [string]$TelegramChatId = '8654262919',
-    [string]$TopicName = 'Rà soát đoạn chat fanpage'
+    [string]$TopicName = ("R" + [char]0x00E0 + " so" + [char]0x00E1 + "t " + [char]0x0111 + "o" + [char]0x1EA1 + "n chat fanpage")
 )
 
 Set-StrictMode -Version Latest
@@ -93,8 +93,8 @@ $smoke = docker exec `
   -e PYTHONPATH=/opt/data/tha-integrations:/opt/data/tha-integrations/.vendor `
   $GatewayContainer `
   $PythonBin -m integrations.hermes.telegram_fanpage_review `
-  review --today --limit 1 | Out-String
-if ($LASTEXITCODE -ne 0 -or $smoke -notmatch 'ĐOẠN CHAT FANPAGE|Không tìm thấy') {
+  --format json review --today --limit 1 | Out-String
+if ($LASTEXITCODE -ne 0 -or $smoke -notmatch '"source"\s*:\s*"FANPAGE_QUEUE"') {
     throw 'Fanpage review live read-only smoke failed.'
 }
 
