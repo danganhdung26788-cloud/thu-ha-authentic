@@ -13,12 +13,12 @@ function row(overrides = {}) {
     'Q-1','DAD-20260725-0002','danganhdung','10_CA_NHAN/danganhdung','VALIDATED_READY',
     'Hermes','SINGLE_PASS_WITH_CHATGPT_CHECK','FALSE','','manifest-id','','0','3','','','','','corr','now','now',
   ];
-  const index = { ownerId: 2, targetWorkspace: 3, status: 4, manifestId: 9, nextRunAt: 13 };
+  const index = { ownerId: 2, targetWorkspace: 3, status: 4, primaryAi: 5, manifestId: 9, nextRunAt: 13 };
   for (const [key, item] of Object.entries(overrides)) value[index[key]] = item;
   return value;
 }
 
-test('accepts a valid owner-scoped queue row', () => {
+test('accepts a valid owner-scoped Hermes queue row', () => {
   assert.deepEqual(validateQueueRow(row(), config), []);
 });
 
@@ -28,6 +28,14 @@ test('rejects owner mismatch', () => {
 
 test('rejects workspace mismatch', () => {
   assert.ok(validateQueueRow(row({ targetWorkspace: '20_DON_VI/MTTQ' }), config).includes('WORKSPACE_SCOPE_MISMATCH'));
+});
+
+test('rejects queue items routed to ChatGPT', () => {
+  assert.ok(validateQueueRow(row({ primaryAi: 'ChatGPT' }), config).includes('PRIMARY_AI_NOT_HERMES'));
+});
+
+test('accepts canonical AI-HERMES identifier', () => {
+  assert.deepEqual(validateQueueRow(row({ primaryAi: 'AI-HERMES' }), config), []);
 });
 
 test('limits selected work to maxBatch', () => {
