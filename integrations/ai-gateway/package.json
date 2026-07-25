@@ -5,9 +5,9 @@
   "type": "module",
   "engines": { "node": ">=20" },
   "scripts": {
-    "start": "node src/worker.js",
-    "once": "node src/worker.js --once",
-    "dry-run": "node src/worker.js --once --dry-run",
+    "start": "node --env-file=.env src/worker.js",
+    "once": "node --env-file=.env src/worker.js --once",
+    "dry-run": "node --env-file=.env src/worker.js --once --dry-run",
     "test": "node --test"
   },
   "dependencies": {
