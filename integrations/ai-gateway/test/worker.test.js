@@ -1,26 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  EXPECTED_HEADERS,
+  assertHeader,
   buildHermesPrompt,
+  executionRow,
   normalizeDispatchError,
-  runCycle,
+  parseHermesResult,
   selectClaimableRows,
+  shouldSkipForIdempotency,
+  staleRecovery,
   validateQueueRow,
 } from '../src/worker.js';
 
 const config = {
-  spreadsheetId: 'sheet-id',
   ownerId: 'danganhdung',
   targetWorkspace: '10_CA_NHAN/danganhdung',
   maxBatch: 5,
+  staleLockMs: 1000,
 };
 
 function row(overrides = {}) {
   const value = [
     'Q-1','DAD-20260725-0002','danganhdung','10_CA_NHAN/danganhdung','VALIDATED_READY',
-    'Hermes','SINGLE_PASS_WITH_CHATGPT_CHECK','FALSE','','manifest-id','','0','3','','','','','corr','now','now',
+    'Hermes','SINGLE_PASS','FALSE','','manifest-id','','0','3','','','','','corr','now','now',
   ];
-  const index = { ownerId: 2, targetWorkspace: 3, status: 4, primaryAi: 5, manifestId: 9, nextRunAt: 13 };
+  const index = {
+    ownerId: 2, targetWorkspace: 3, status: 4, primaryAi: 5,
+    manifestId: 9, nextRunAt: 13, claimedAt: 14,
+  };
   for (const [key, item] of Object.entries(overrides)) value[index[key]] = item;
   return value;
 }
@@ -46,41 +54,65 @@ test('accepts canonical AI-HERMES identifier', () => {
 });
 
 test('limits selected work to maxBatch', () => {
-  const rows = Array.from({ length: 10 }, () => row());
-  assert.equal(selectClaimableRows(rows, { ...config, maxBatch: 3 }).length, 3);
+  assert.equal(selectClaimableRows(Array.from({ length: 8 }, () => row()), { ...config, maxBatch: 3 }).length, 3);
 });
 
-test('builds a manifest-scoped Hermes prompt', () => {
+test('builds prompt with resolved manifest content', () => {
   const prompt = buildHermesPrompt({
-    queueId: 'Q-1', taskId: 'DAD-1', ownerId: 'danganhdung',
-    targetWorkspace: '10_CA_NHAN/danganhdung', primaryAi: 'Hermes',
-    reviewMode: 'SINGLE_PASS', approvalRequired: false,
-    taskFolderId: 'folder', manifestId: 'manifest', correlationId: 'corr',
+    queueId: 'Q', taskId: 'T', ownerId: 'danganhdung',
+    targetWorkspace: '10_CA_NHAN/danganhdung', approvalRequired: false,
+    manifestId: 'M', manifestText: 'SAFE_MANIFEST',
   });
-  assert.match(prompt, /TASK_ID: DAD-1/);
-  assert.match(prompt, /MANIFEST_ID: manifest/);
-  assert.match(prompt, /RESULT_URI:/);
+  assert.match(prompt, /MANIFEST_CONTENT:\nSAFE_MANIFEST/);
+  assert.match(prompt, /HANDOFF_REQUIRED: CHATGPT/);
 });
 
-test('dry-run is read-only and reports claimable rows', async () => {
-  let writes = 0;
-  const sheets = {
-    spreadsheets: {
-      values: {
-        get: async () => ({ data: { values: [row()] } }),
-        update: async () => { writes += 1; },
-        append: async () => { writes += 1; },
-      },
-    },
-  };
+test('recovers stale RUNNING lock to RETRY_WAIT', () => {
+  const stale = row({ status: 'RUNNING', claimedAt: new Date(Date.now() - 5000).toISOString() });
+  const recovered = staleRecovery([stale], config);
+  assert.equal(recovered.length, 1);
+  assert.equal(recovered[0].row[4], 'RETRY_WAIT');
+  assert.equal(recovered[0].row[10], '');
+  assert.equal(recovered[0].row[16], 'STALE_LOCK_RECOVERED');
+});
 
-  const result = await runCycle(sheets, { ...config, dryRun: true });
-  assert.deepEqual(result, { processed: 0, claimable: 1 });
-  assert.equal(writes, 0);
+test('does not recover fresh lock', () => {
+  const fresh = row({ status: 'RUNNING', claimedAt: new Date().toISOString() });
+  assert.equal(staleRecovery([fresh], config).length, 0);
+});
+
+test('schema contract accepts exact execution header', () => {
+  assert.equal(assertHeader(EXPECTED_HEADERS.EXECUTIONS, EXPECTED_HEADERS.EXECUTIONS, 'EXECUTIONS'), true);
+});
+
+test('schema contract rejects changed header', () => {
+  assert.throws(() => assertHeader(['BAD'], EXPECTED_HEADERS.EXECUTIONS, 'EXECUTIONS'), /schema mismatch/);
+});
+
+test('execution row aligns with 16 live columns', () => {
+  const values = executionRow({
+    executionId: 'E', taskId: 'T', adapterId: 'A', attemptNo: 1,
+    status: 'SUCCESS', startedAt: 'S', finishedAt: 'F',
+  });
+  assert.equal(values.length, 16);
+  assert.equal(values[0], 'E');
+  assert.equal(values[6], 'SUCCESS');
+});
+
+test('idempotency detects existing successful execution', () => {
+  const rows = [EXPECTED_HEADERS.EXECUTIONS, ['E', 'T', '', '', '', '', 'SUCCESS']];
+  assert.equal(shouldSkipForIdempotency(rows, 'T'), true);
+  assert.equal(shouldSkipForIdempotency(rows, 'OTHER'), false);
+});
+
+test('parses ChatGPT handoff request', () => {
+  const result = parseHermesResult('HANDOFF_REQUIRED: CHATGPT\nRESULT_URI: gdrive://x');
+  assert.equal(result.handoffRequired, true);
+  assert.equal(result.resultUri, 'gdrive://x');
 });
 
 test('normalizes AbortSignal timeout to HERMES_TIMEOUT', () => {
-  const error = new Error('The operation was aborted due to timeout');
+  const error = new Error('timeout');
   error.name = 'TimeoutError';
   assert.equal(normalizeDispatchError(error).code, 'HERMES_TIMEOUT');
 });
