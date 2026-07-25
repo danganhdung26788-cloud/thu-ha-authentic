@@ -1,13 +1,31 @@
 #Requires -RunAsAdministrator
 
 param(
-    [string]$PythonExecutable = "python"
+    [string]$PythonExecutable
 )
 
 $ErrorActionPreference = "Stop"
+$routesRoot = Split-Path $PSScriptRoot -Parent
 $runner = Join-Path $PSScriptRoot "run_taskflow_routes_v2.ps1"
-if (-not (Test-Path -LiteralPath $runner)) {
-    throw "Runner not found: $runner"
+if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) {
+    throw "Runner script not found: $runner"
+}
+$runner = (Resolve-Path -LiteralPath $runner).Path
+
+if ([string]::IsNullOrWhiteSpace($PythonExecutable)) {
+    $PythonExecutable = Join-Path $routesRoot ".venv\Scripts\python.exe"
+}
+if (-not (Test-Path -LiteralPath $PythonExecutable -PathType Leaf)) {
+    throw "Python executable not found: $PythonExecutable. Create the repository virtual environment and install integrations/hermes-routes/requirements.txt."
+}
+$PythonExecutable = (Resolve-Path -LiteralPath $PythonExecutable).Path
+
+$credentialsPath = $env:GOOGLE_APPLICATION_CREDENTIALS
+if ([string]::IsNullOrWhiteSpace($credentialsPath)) {
+    throw "GOOGLE_APPLICATION_CREDENTIALS is not set. Set it to the Google credential file before installing Scheduled Tasks."
+}
+if (-not (Test-Path -LiteralPath $credentialsPath -PathType Leaf)) {
+    throw "Google credential file not found: $credentialsPath"
 }
 
 $definitions = @(
