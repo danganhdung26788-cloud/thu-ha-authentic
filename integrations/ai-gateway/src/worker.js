@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 import { google } from 'googleapis';
 
 const QUEUE_RANGE = 'DISPATCH_QUEUE!A2:T5000';
@@ -265,7 +267,10 @@ async function main() {
   } while (true);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const modulePath = path.resolve(fileURLToPath(import.meta.url));
+const entryPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
+
+if (entryPath && modulePath === entryPath) {
   main().catch(error => {
     console.error(JSON.stringify({ at: new Date().toISOString(), error: error.message, code: error.code || 'UNEXPECTED_ERROR' }));
     process.exitCode = 1;
