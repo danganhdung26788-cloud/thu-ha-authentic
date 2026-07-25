@@ -32,6 +32,7 @@ export function loadConfig() {
     hermesApiBaseUrl: process.env.HERMES_API_BASE_URL || 'http://127.0.0.1:8642',
     hermesApiKey: process.env.HERMES_API_KEY || '',
     hermesApiModel: process.env.HERMES_API_MODEL || 'hermes-agent',
+    hermesTimeoutMs: Number(process.env.HERMES_API_TIMEOUT_MS || 600000),
     dryRun: process.argv.includes('--dry-run'),
     once: process.argv.includes('--once'),
   };
@@ -130,10 +131,19 @@ function parseHermesResult(content) {
   };
 }
 
-async function dispatchToHermes(config, payload) {
-  if (config.dryRun) {
-    return { status: 'DRY_RUN_OK', resultUri: '', summary: 'Dispatch skipped in dry-run mode.' };
+export function normalizeDispatchError(error) {
+  const timeout = error?.name === 'AbortError'
+    || error?.name === 'TimeoutError'
+    || error?.code === 'ABORT_ERR'
+    || error?.code === 23;
+
+  if (timeout) {
+    error.code = 'HERMES_TIMEOUT';
   }
+  return error;
+}
+
+async function dispatchToHermes(config, payload) {
   if (!config.hermesApiKey) {
     const error = new Error('Hermes API key is not configured');
     error.code = 'BLOCKED_CONNECTOR';
@@ -155,7 +165,7 @@ async function dispatchToHermes(config, payload) {
       ],
       stream: false,
     }),
-    signal: AbortSignal.timeout(300000),
+    signal: AbortSignal.timeout(config.hermesTimeoutMs),
   });
 
   if (!response.ok) {
@@ -214,6 +224,7 @@ async function processItem(sheets, config, item) {
 
     row[QUEUE_COLUMNS.status] = nextStatus;
     row[QUEUE_COLUMNS.completedAt] = nextStatus === 'COMPLETED' ? completedAt : '';
+    row[QUEUE_COLUMNS.nextRunAt] = '';
     row[QUEUE_COLUMNS.lastErrorCode] = '';
     row[QUEUE_COLUMNS.updatedAt] = completedAt;
     await updateQueueRow(sheets, config, item.sheetRow, row);
@@ -229,7 +240,8 @@ async function processItem(sheets, config, item) {
       correlationId: row[QUEUE_COLUMNS.correlationId], resourceUri: result.resultUri || '',
       details: result.summary || '',
     });
-  } catch (error) {
+  } catch (rawError) {
+    const error = normalizeDispatchError(rawError);
     const attempts = Number(row[QUEUE_COLUMNS.attemptCount] || 1);
     const maxAttempts = Number(row[QUEUE_COLUMNS.maxAttempts] || 3);
     const retryable = error.code !== 'BLOCKED_CONNECTOR' && attempts < maxAttempts;
@@ -252,16 +264,26 @@ export async function runCycle(sheets, config) {
   const response = await sheets.spreadsheets.values.get({ spreadsheetId: config.spreadsheetId, range: QUEUE_RANGE });
   const rows = response.data.values || [];
   const items = selectClaimableRows(rows, config);
+
+  if (config.dryRun) {
+    return { processed: 0, claimable: items.length };
+  }
+
   for (const item of items) await processItem(sheets, config, item);
-  return items.length;
+  return { processed: items.length, claimable: items.length };
 }
 
 async function main() {
   const config = loadConfig();
   const sheets = await getSheetsClient();
   do {
-    const processed = await runCycle(sheets, config);
-    console.log(JSON.stringify({ at: new Date().toISOString(), processed, dryRun: config.dryRun }));
+    const result = await runCycle(sheets, config);
+    console.log(JSON.stringify({
+      at: new Date().toISOString(),
+      processed: result.processed,
+      claimable: result.claimable,
+      dryRun: config.dryRun,
+    }));
     if (config.once) break;
     await new Promise(resolve => setTimeout(resolve, config.pollIntervalMs));
   } while (true);
