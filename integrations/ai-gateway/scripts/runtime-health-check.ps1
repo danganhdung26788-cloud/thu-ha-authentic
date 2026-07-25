@@ -9,14 +9,24 @@ $RepoDir = Resolve-Path (Join-Path $WorkerDir '..\..')
 $Branch = (git -C $RepoDir rev-parse --abbrev-ref HEAD).Trim()
 $Commit = (git -C $RepoDir rev-parse HEAD).Trim()
 
-$DispatcherProcesses = Get-CimInstance Win32_Process |
+$WrapperProcesses = @(Get-CimInstance Win32_Process |
+    Where-Object {
+        $_.Name -eq 'node.exe' -and
+        $_.CommandLine -like '*integrations\ai-gateway*run-with-log-rotation.js*'
+    })
+
+$WorkerProcesses = @(Get-CimInstance Win32_Process |
     Where-Object {
         $_.Name -eq 'node.exe' -and
         $_.CommandLine -like '*integrations\ai-gateway*worker.js*'
-    }
+    })
 
-if ($DispatcherProcesses.Count -ne 1) {
-    throw "Expected exactly one Hermes dispatcher process, found $($DispatcherProcesses.Count)"
+if ($WrapperProcesses.Count -ne 1) {
+    throw "Expected exactly one Hermes log-rotation wrapper process, found $($WrapperProcesses.Count)"
+}
+
+if ($WorkerProcesses.Count -ne 1) {
+    throw "Expected exactly one Hermes dispatcher worker process, found $($WorkerProcesses.Count)"
 }
 
 $TaskResults = foreach ($taskName in @($DispatcherTask, $ApprovalTask)) {
@@ -36,12 +46,15 @@ if (-not (Test-Path $DispatcherLog)) {
 }
 
 $LastLog = Get-Content $DispatcherLog -Tail 20
-if ($LastLog -match 'UNEXPECTED_ERROR|SCHEMA_CONTRACT_MISMATCH|BLOCKED_CONNECTOR') {
+if ($LastLog -match 'UNEXPECTED_ERROR|SCHEMA_CONTRACT_MISMATCH|BLOCKED_CONNECTOR|launcher_error') {
     throw 'Recent dispatcher log contains a blocking error'
 }
 
 $TaskResults | Format-Table -AutoSize
-$DispatcherProcesses | Select-Object ProcessId, Name, CommandLine | Format-List
+Write-Host 'WRAPPER PROCESS:'
+$WrapperProcesses | Select-Object ProcessId, Name, CommandLine | Format-List
+Write-Host 'WORKER PROCESS:'
+$WorkerProcesses | Select-Object ProcessId, Name, CommandLine | Format-List
 Write-Host "BRANCH : $Branch"
 Write-Host "COMMIT : $Commit"
 Write-Host 'LAST LOG:'
