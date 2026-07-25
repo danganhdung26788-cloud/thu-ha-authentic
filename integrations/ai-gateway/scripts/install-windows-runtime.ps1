@@ -28,7 +28,8 @@ $DispatcherVbsContent = @"
 Option Explicit
 Dim shell
 Set shell = CreateObject("WScript.Shell")
-shell.Run Chr(34) & "$NodePath" & Chr(34) & " --env-file=" & Chr(34) & "$WorkerDir\.env" & Chr(34) & " " & Chr(34) & "$WorkerDir\src\run-with-log-rotation.js" & Chr(34), 0, False
+shell.CurrentDirectory = "$WorkerDir"
+shell.Run Chr(34) & "$NodePath" & Chr(34) & " --env-file=" & Chr(34) & ".env" & Chr(34) & " " & Chr(34) & "src\run-with-log-rotation.js" & Chr(34), 0, False
 "@
 
 $ApprovalEscaped = $ApprovalCommand.Replace('"', '""')
@@ -36,6 +37,7 @@ $ApprovalVbsContent = @"
 Option Explicit
 Dim shell
 Set shell = CreateObject("WScript.Shell")
+shell.CurrentDirectory = "$WorkerDir"
 shell.Run "$ApprovalEscaped", 0, True
 "@
 
