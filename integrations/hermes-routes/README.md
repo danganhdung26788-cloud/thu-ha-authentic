@@ -28,13 +28,15 @@ Với OPS Health, `ITEMS_READ` là tổng số bản ghi dữ liệu (không tí
 ## Cài phụ thuộc và cấu hình
 
 ```powershell
-python -m pip install -r integrations/hermes-routes/requirements.txt
+python -m venv integrations/hermes-routes/.venv
+& "integrations/hermes-routes/.venv/Scripts/python.exe" -m pip install -r integrations/hermes-routes/requirements.txt
 $env:GOOGLE_APPLICATION_CREDENTIALS = "C:\secure\google-credentials.json"
 $env:HERMES_OPS_STALE_HOURS = "48" # tùy chọn
 ```
 
 Credential phải có quyền đọc TalkFlow DB và OPS DB, cùng quyền append/read-back
-`HERMES_CONTROL_DB/RUN_LOG`. Không đặt credential trong repository.
+`HERMES_CONTROL_DB/RUN_LOG`. Không đặt credential hoặc virtual environment vào
+Git.
 
 ## Lệnh chạy
 
@@ -61,6 +63,18 @@ python -m unittest discover -s integrations/hermes-routes/tests -p "test_*.py" -
 
 `windows/install_taskflow_routes_v2.ps1` đăng ký idempotent ba Scheduled Task
 hằng ngày lúc 07:30, 08:00 và 09:00, chạy ẩn với `MultipleInstances=IgnoreNew`.
+Installer mặc định dùng
+`integrations/hermes-routes/.venv/Scripts/python.exe`. Trước khi đăng ký task,
+installer kiểm tra runner, Python executable, biến `GOOGLE_APPLICATION_CREDENTIALS`
+và file credential; thiếu bất kỳ điều kiện nào thì dừng mà không đăng ký task.
+Có thể override bằng đường dẫn file Python cụ thể:
+
+```powershell
+& "integrations/hermes-routes/windows/install_taskflow_routes_v2.ps1"
+& "integrations/hermes-routes/windows/install_taskflow_routes_v2.ps1" `
+  -PythonExecutable "D:\runtime\Scripts\python.exe"
+```
+
 Không chạy installer trước khi unit test và smoke test được phê duyệt.
 
 ## Trạng thái legacy tách biệt
