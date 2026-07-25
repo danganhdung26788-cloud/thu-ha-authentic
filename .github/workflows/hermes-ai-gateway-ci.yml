@@ -31,7 +31,8 @@ jobs:
         working-directory: .
         run: |
           test ! -f integrations/ai-gateway/.env
-          ! git ls-files | grep -E '(^|/)(service-account.*\.json|\.env($|\.))'
+          ! git ls-files | grep -E '(^|/)service-account.*\.json$'
+          ! git ls-files | grep -E '(^|/)\.env($|\.)' | grep -vE '/\.env\.example$'
       - name: Install dependencies and generate lockfile
         run: npm install --ignore-scripts --no-audit --no-fund
       - name: Upload generated dependency lock
