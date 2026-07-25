@@ -35,12 +35,17 @@ export function loadConfig() {
   };
 }
 
+function normalizeAiId(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
 export function validateQueueRow(row, config) {
   const errors = [];
   if (!row[QUEUE_COLUMNS.queueId]) errors.push('QUEUE_ID_REQUIRED');
   if (!row[QUEUE_COLUMNS.taskId]) errors.push('TASK_ID_REQUIRED');
   if (row[QUEUE_COLUMNS.ownerId] !== config.ownerId) errors.push('OWNER_SCOPE_MISMATCH');
   if (row[QUEUE_COLUMNS.targetWorkspace] !== config.targetWorkspace) errors.push('WORKSPACE_SCOPE_MISMATCH');
+  if (!['HERMES', 'AI-HERMES'].includes(normalizeAiId(row[QUEUE_COLUMNS.primaryAi]))) errors.push('PRIMARY_AI_NOT_HERMES');
   if (!row[QUEUE_COLUMNS.manifestId]) errors.push('MANIFEST_ID_REQUIRED');
   if (!['VALIDATED_READY', 'RETRY_WAIT'].includes(row[QUEUE_COLUMNS.status])) errors.push('QUEUE_STATUS_NOT_CLAIMABLE');
   const nextRunAt = row[QUEUE_COLUMNS.nextRunAt];
@@ -262,7 +267,7 @@ async function main() {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch(error => {
-    console.error(error);
+    console.error(JSON.stringify({ at: new Date().toISOString(), error: error.message, code: error.code || 'UNEXPECTED_ERROR' }));
     process.exitCode = 1;
   });
 }
