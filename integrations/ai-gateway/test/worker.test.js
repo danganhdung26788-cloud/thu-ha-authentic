@@ -1,8 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildHermesPrompt, selectClaimableRows, validateQueueRow } from '../src/worker.js';
+import {
+  buildHermesPrompt,
+  normalizeDispatchError,
+  runCycle,
+  selectClaimableRows,
+  validateQueueRow,
+} from '../src/worker.js';
 
 const config = {
+  spreadsheetId: 'sheet-id',
   ownerId: 'danganhdung',
   targetWorkspace: '10_CA_NHAN/danganhdung',
   maxBatch: 5,
@@ -53,4 +60,27 @@ test('builds a manifest-scoped Hermes prompt', () => {
   assert.match(prompt, /TASK_ID: DAD-1/);
   assert.match(prompt, /MANIFEST_ID: manifest/);
   assert.match(prompt, /RESULT_URI:/);
+});
+
+test('dry-run is read-only and reports claimable rows', async () => {
+  let writes = 0;
+  const sheets = {
+    spreadsheets: {
+      values: {
+        get: async () => ({ data: { values: [row()] } }),
+        update: async () => { writes += 1; },
+        append: async () => { writes += 1; },
+      },
+    },
+  };
+
+  const result = await runCycle(sheets, { ...config, dryRun: true });
+  assert.deepEqual(result, { processed: 0, claimable: 1 });
+  assert.equal(writes, 0);
+});
+
+test('normalizes AbortSignal timeout to HERMES_TIMEOUT', () => {
+  const error = new Error('The operation was aborted due to timeout');
+  error.name = 'TimeoutError';
+  assert.equal(normalizeDispatchError(error).code, 'HERMES_TIMEOUT');
 });
