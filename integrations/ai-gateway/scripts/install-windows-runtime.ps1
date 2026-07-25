@@ -20,11 +20,6 @@ foreach ($path in @(
 New-Item -ItemType Directory -Path $RuntimeDir -Force | Out-Null
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
-$DispatcherCommand = '"{0}" --env-file="{1}" "{2}"' -f `
-    $NodePath,
-    (Join-Path $WorkerDir '.env'),
-    (Join-Path $WorkerDir 'src\run-with-log-rotation.js')
-
 $ApprovalCommand = 'cmd.exe /d /s /c "cd /d ""{0}"" && ""{1}"" --env-file="".env"" ""src\approval-processor.js"" >> ""runtime\approval.log"" 2>&1"' -f `
     $WorkerDir,
     $NodePath
@@ -83,10 +78,11 @@ $ApprovalAction = New-ScheduledTaskAction `
     -Execute "$env:WINDIR\System32\wscript.exe" `
     -Argument "`"$ApprovalVbs`"" `
     -WorkingDirectory $WorkerDir
-$ApprovalTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
-$ApprovalTrigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+$ApprovalTrigger = New-ScheduledTaskTrigger `
+    -Once `
+    -At (Get-Date).AddMinutes(1) `
     -RepetitionInterval (New-TimeSpan -Minutes 1) `
-    -RepetitionDuration ([TimeSpan]::MaxValue)).Repetition
+    -RepetitionDuration (New-TimeSpan -Days 3650)
 Register-ScheduledTask `
     -TaskName $ApprovalTask `
     -Action $ApprovalAction `
