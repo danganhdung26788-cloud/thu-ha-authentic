@@ -1,0 +1,45 @@
+name: Hermes AI Gateway CI
+
+on:
+  pull_request:
+    paths:
+      - 'integrations/ai-gateway/**'
+      - '.github/workflows/hermes-ai-gateway-ci.yml'
+      - '.gitignore'
+  push:
+    branches: [main]
+    paths:
+      - 'integrations/ai-gateway/**'
+      - '.github/workflows/hermes-ai-gateway-ci.yml'
+      - '.gitignore'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: integrations/ai-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: integrations/ai-gateway/package-lock.json
+      - name: Verify secrets are not tracked
+        working-directory: .
+        run: |
+          test ! -f integrations/ai-gateway/.env
+          ! git ls-files | grep -E '(^|/)service-account.*\.json$'
+          ! git ls-files | grep -E '(^|/)\.env($|\.)' | grep -vE '/\.env\.example$'
+      - name: Install dependencies reproducibly
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Syntax check
+        run: npm run check
+      - name: Unit tests
+        run: npm test
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high

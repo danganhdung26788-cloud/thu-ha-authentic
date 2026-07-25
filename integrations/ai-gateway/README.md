@@ -1,15 +1,20 @@
-# Hermes AI Gateway Dispatcher G0.3
+# Hermes AI Gateway Dispatcher G0.4
 
-Worker nhẹ chạy trực tiếp bằng Node.js 20, chưa Docker hóa.
+Worker Node.js 20 điều phối tác vụ owner-scoped từ AI Gateway Control DB sang Hermes qua OpenAI-compatible API.
 
-## Chức năng
+## Năng lực G0.4
 
-- Đọc `DISPATCH_QUEUE` từ Google Sheets.
-- Chỉ nhận tác vụ đúng owner `danganhdung` và workspace `10_CA_NHAN/danganhdung`.
-- Claim bằng `LOCK_TOKEN`, tăng số lần thử, ghi `AUDIT_EVENTS`.
-- Gọi Hermes qua webhook.
-- Chuyển trạng thái `COMPLETED`, `WAITING_APPROVAL`, `RETRY_WAIT`, `BLOCKED_CONNECTOR` hoặc `FAILED_FINALIZATION`.
-- Không quét Google Drive và không tự xóa dữ liệu.
+- Chỉ claim đúng owner `danganhdung`, workspace `10_CA_NHAN/danganhdung` và `PRIMARY_AI = Hermes|AI-HERMES`.
+- Đọc đúng manifest theo `MANIFEST_ID`; không tìm kiếm toàn Google Drive.
+- Claim bằng lock token, retry có kiểm soát và phục hồi lock stale.
+- Idempotency: không tạo execution thành công thứ hai cho cùng task đã SUCCESS.
+- Đồng bộ trạng thái `TASKS` với `DISPATCH_QUEUE`.
+- Ghi đúng schema live của `EXECUTIONS` và `AUDIT_EVENTS`.
+- Tạo `HANDOFFS` khi Hermes trả `HANDOFF_REQUIRED: CHATGPT`.
+- Tạo `APPROVALS` và chuyển `WAITING_APPROVAL` khi task yêu cầu phê duyệt.
+- Ghi heartbeat vào `RUNTIME_CHECKS`.
+- Dry-run chỉ đọc tuyệt đối.
+- Log rotation có giới hạn dung lượng và số bản giữ lại.
 
 ## Cài đặt
 
@@ -19,27 +24,60 @@ npm install
 Copy-Item .env.example .env
 ```
 
-Nạp biến môi trường từ `.env` bằng cơ chế runtime hiện có hoặc đặt trực tiếp trong Scheduled Task.
-
-Google service account phải có quyền chỉnh sửa Spreadsheet `AI_GATEWAY_CONTROL_DB_DANGANHDUNG`.
+Không commit `.env`, service-account key, API key, `node_modules` hoặc `runtime`.
 
 ## Kiểm thử
 
 ```powershell
-npm test
-npm run dry-run
+npm.cmd run check
+npm.cmd test
+npm.cmd run dry-run
 ```
 
-## Chạy một vòng
+## Chạy một chu kỳ
 
 ```powershell
-npm run once
+npm.cmd run once
 ```
 
 ## Chạy liên tục
 
 ```powershell
-npm start
+npm.cmd start
 ```
 
-Không bật chạy liên tục trước khi cấu hình `GOOGLE_APPLICATION_CREDENTIALS` và `HERMES_DISPATCH_WEBHOOK_URL`.
+Scheduled Task trên Windows nên gọi launcher `src/run-with-log-rotation.js` ở chế độ ẩn thay vì redirect log không giới hạn.
+
+## Heartbeat
+
+Worker upsert bản ghi `CHK-HERMES-HEARTBEAT` trong `RUNTIME_CHECKS`, gồm version, commit, queue depth và lỗi gần nhất.
+
+## Recovery
+
+Các hàng `CLAIMED` hoặc `RUNNING` quá `AI_GATEWAY_STALE_LOCK_MS` được đưa về `RETRY_WAIT`, xóa lock token và ghi audit `STALE_LOCK_RECOVERED`.
+
+## Handoff
+
+Hermes yêu cầu chuyển ChatGPT bằng dòng:
+
+```text
+HANDOFF_REQUIRED: CHATGPT
+```
+
+Worker tạo bản ghi `HANDOFFS` với owner, workspace, manifest ID, phạm vi đọc/ghi, uncertainty và acceptance criteria.
+
+## Approval
+
+Task có `APPROVAL_REQUIRED = TRUE` không được đánh dấu hoàn tất. Worker tạo bản ghi `APPROVALS` trạng thái `PENDING` và chuyển queue/task sang `WAITING_APPROVAL`.
+
+## Dashboard
+
+Tab `DASHBOARD` trong AI Gateway Control DB hiển thị pending, running, completed, waiting approval, handoff, failed/blocked, success rate và heartbeat cuối.
+
+## An toàn
+
+- Không quét toàn Drive.
+- Không tự xóa dữ liệu.
+- Không claim nhiệm vụ ChatGPT.
+- Mọi ghi dữ liệu đều có audit hoặc execution tương ứng.
+- Sau triển khai phải chạy smoke test và đọc lại các bảng live.

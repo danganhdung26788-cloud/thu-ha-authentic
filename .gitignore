@@ -1,0 +1,12 @@
+# Hermes AI Gateway local runtime and secrets
+integrations/ai-gateway/.env
+integrations/ai-gateway/.env.*
+!integrations/ai-gateway/.env.example
+integrations/ai-gateway/node_modules/
+integrations/ai-gateway/runtime/
+
+# Generic local secrets and logs
+*.log
+*.key
+*.pem
+*service-account*.json
