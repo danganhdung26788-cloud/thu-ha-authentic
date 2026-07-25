@@ -6,10 +6,12 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "start": "node --env-file=.env src/worker.js",
+    "start:managed": "node --env-file=.env src/run-with-log-rotation.js",
     "once": "node --env-file=.env src/worker.js --once",
     "dry-run": "node --env-file=.env src/worker.js --once --dry-run",
+    "approval-once": "node --env-file=.env src/approval-processor.js --once",
     "test": "node --test",
-    "check": "node --check src/worker.js && node --check src/run-with-log-rotation.js"
+    "check": "node --check src/worker.js && node --check src/run-with-log-rotation.js && node --check src/approval-processor.js"
   },
   "dependencies": {
     "googleapis": "^144.0.0"
