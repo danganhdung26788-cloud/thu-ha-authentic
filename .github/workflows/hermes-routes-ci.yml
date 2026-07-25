@@ -1,0 +1,68 @@
+name: Hermes Routes CI
+
+on:
+  pull_request:
+    paths:
+      - 'integrations/hermes-routes/**'
+      - '.github/workflows/hermes-routes-ci.yml'
+      - '.gitignore'
+  push:
+    branches: [main]
+    paths:
+      - 'integrations/hermes-routes/**'
+      - '.github/workflows/hermes-routes-ci.yml'
+      - '.gitignore'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: integrations/hermes-routes/requirements.txt
+
+      - name: Verify local artifacts and secrets are not tracked
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! git ls-files | grep -E '(^|/)\.venv(/|$)'
+          ! git ls-files | grep -E '(^|/)__pycache__(/|$)'
+          ! git ls-files | grep -E '\.pyc$'
+          ! git ls-files | grep -E '(^|/)(application_default_credentials|service-account).*\.json$'
+          ! git ls-files | grep -E '(^|/)runtime(/|$)'
+
+      - name: Install dependencies
+        run: python -m pip install -r integrations/hermes-routes/requirements.txt
+
+      - name: Python compile check
+        run: python -m compileall -q integrations/hermes-routes/src integrations/hermes-routes/tests
+
+      - name: Unit and contract tests
+        run: python -m unittest discover -s integrations/hermes-routes/tests -p 'test_*.py' -v
+
+      - name: PowerShell syntax check
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = Get-ChildItem -Path 'integrations/hermes-routes/windows' -Filter '*.ps1' -File
+          if (-not $files) { throw 'No PowerShell files found.' }
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $file.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw "PowerShell parse failed: $($file.FullName)"
+            }
+          }
