@@ -5,6 +5,12 @@ integrations/ai-gateway/.env.*
 integrations/ai-gateway/node_modules/
 integrations/ai-gateway/runtime/
 
+# Hermes TalkFlow Routes local runtime and Python artifacts
+integrations/hermes-routes/.venv/
+integrations/hermes-routes/runtime/
+integrations/hermes-routes/**/__pycache__/
+*.pyc
+
 # Generic local secrets and logs
 *.log
 *.key
