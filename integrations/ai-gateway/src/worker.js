@@ -138,7 +138,12 @@ export function parseHermesResult(content) {
 }
 
 export function normalizeDispatchError(error) {
-  if (['AbortError', 'TimeoutError'].includes(error?.name) || ['ABORT_ERR', 23].includes(error?.code)) {
+  const causeCode = error?.cause?.code || error?.code;
+  if (['ENOTFOUND', 'EAI_AGAIN', 'EAI_FAIL'].includes(causeCode)) {
+    error.code = 'HERMES_DNS_ERROR';
+  } else if (['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT'].includes(causeCode)) {
+    error.code = 'HERMES_NETWORK_ERROR';
+  } else if (['AbortError', 'TimeoutError'].includes(error?.name) || ['ABORT_ERR', 23].includes(error?.code)) {
     error.code = 'HERMES_TIMEOUT';
   }
   return error;
@@ -298,15 +303,22 @@ async function writeApproval(sheets, config, payload, result, executionId) {
   return approvalId;
 }
 
+export function buildHeartbeatRow(config, stats, at = new Date().toISOString()) {
+  const checkId = 'CHK-HERMES-HEARTBEAT';
+  const lastError = String(stats.lastError || '').trim();
+  const actual = lastError ? 'DEGRADED' : 'ALIVE';
+  return [
+    checkId, 'HERMES_WORKER_HEARTBEAT', 'RUNTIME', 'Hermes AI Gateway Dispatcher',
+    'ALIVE', actual, lastError ? 'FAIL' : 'PASS', 'TRUE', at, lastError, '',
+    'AI-HERMES-DISPATCHER', 'CORR-HERMES-HEARTBEAT',
+    `version=${config.workerVersion};commit=${config.workerCommit};queue_depth=${stats.queueDepth};last_error=${lastError}`,
+  ];
+}
+
 async function heartbeat(sheets, config, stats) {
   const rows = await getValues(sheets, config, 'RUNTIME_CHECKS!A1:N1000');
-  const checkId = 'CHK-HERMES-HEARTBEAT';
-  const row = [
-    checkId, 'HERMES_WORKER_HEARTBEAT', 'RUNTIME', 'Hermes AI Gateway Dispatcher',
-    'ALIVE', 'ALIVE', 'PASS', 'TRUE', new Date().toISOString(), '', '',
-    'AI-HERMES-DISPATCHER', 'CORR-HERMES-HEARTBEAT',
-    `version=${config.workerVersion};commit=${config.workerCommit};queue_depth=${stats.queueDepth};last_error=${stats.lastError || ''}`,
-  ];
+  const row = buildHeartbeatRow(config, stats);
+  const checkId = row[0];
   const index = rows.findIndex(existing => existing[0] === checkId);
   if (index >= 1) await updateRow(sheets, config, `RUNTIME_CHECKS!A${index + 1}:N${index + 1}`, row);
   else await appendRow(sheets, config, RANGES.runtime, row);
@@ -325,7 +337,7 @@ async function processItem(sheets, drive, config, item, executionRows) {
     row[QUEUE_COLUMNS.updatedAt] = startedAt;
     await updateRow(sheets, config, `DISPATCH_QUEUE!A${item.sheetRow}:T${item.sheetRow}`, row);
     await syncTask(sheets, config, row[QUEUE_COLUMNS.taskId], 'COMPLETED', 'IDEMPOTENT_EXISTING_EXECUTION', '');
-    return;
+    return { status: 'COMPLETED', errorCode: '' };
   }
 
   const lockToken = crypto.randomUUID();
@@ -411,6 +423,7 @@ async function processItem(sheets, drive, config, item, executionRows) {
       statusFrom: 'RUNNING', statusTo: finalStatus, at: finishedAt,
       correlationId: row[QUEUE_COLUMNS.correlationId], details: result.summary,
     });
+    return { status: finalStatus, errorCode: '' };
   } catch (rawError) {
     const error = normalizeDispatchError(rawError);
     const attempts = Number(row[QUEUE_COLUMNS.attemptCount] || 1);
@@ -457,6 +470,7 @@ async function processItem(sheets, drive, config, item, executionRows) {
       correlationId: row[QUEUE_COLUMNS.correlationId],
       errorCode: row[QUEUE_COLUMNS.lastErrorCode], details: error.message,
     });
+    return { status: row[QUEUE_COLUMNS.status], errorCode: row[QUEUE_COLUMNS.lastErrorCode] };
   }
 }
 
@@ -483,9 +497,13 @@ export async function runCycle(sheets, drive, config) {
   }
 
   const items = selectClaimableRows(queueRows, config);
-  if (config.dryRun) return { processed: 0, claimable: items.length, recovered: recovered.length };
-  for (const item of items) await processItem(sheets, drive, config, item, executionRows);
-  return { processed: items.length, claimable: items.length, recovered: recovered.length };
+  if (config.dryRun) return { processed: 0, claimable: items.length, recovered: recovered.length, lastError: '' };
+  let lastError = '';
+  for (const item of items) {
+    const outcome = await processItem(sheets, drive, config, item, executionRows);
+    if (!lastError && outcome?.errorCode) lastError = outcome.errorCode;
+  }
+  return { processed: items.length, claimable: items.length, recovered: recovered.length, lastError };
 }
 
 async function main() {
@@ -494,9 +512,10 @@ async function main() {
   let lastHeartbeat = 0;
   do {
     let lastError = '';
-    let result = { processed: 0, claimable: 0, recovered: 0 };
+    let result = { processed: 0, claimable: 0, recovered: 0, lastError: '' };
     try {
       result = await runCycle(sheets, drive, config);
+      lastError = result.lastError || '';
     } catch (error) {
       lastError = error.code || error.message;
       throw error;
