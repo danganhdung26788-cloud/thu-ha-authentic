@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   EXPECTED_HEADERS,
   assertHeader,
+  buildHeartbeatRow,
   buildHermesPrompt,
   executionRow,
   normalizeDispatchError,
@@ -115,4 +116,33 @@ test('normalizes AbortSignal timeout to HERMES_TIMEOUT', () => {
   const error = new Error('timeout');
   error.name = 'TimeoutError';
   assert.equal(normalizeDispatchError(error).code, 'HERMES_TIMEOUT');
+});
+test('normalizes DNS lookup failure to HERMES_DNS_ERROR', () => {
+  const error = new TypeError('fetch failed');
+  error.cause = { code: 'ENOTFOUND' };
+  assert.equal(normalizeDispatchError(error).code, 'HERMES_DNS_ERROR');
+});
+
+test('builds DEGRADED heartbeat when a cycle reports an error', () => {
+  const heartbeat = buildHeartbeatRow(
+    { workerVersion: '0.4.0', workerCommit: 'test' },
+    { queueDepth: 1, lastError: 'HERMES_DNS_ERROR' },
+    '2026-07-26T06:00:00.000Z',
+  );
+  assert.equal(heartbeat[4], 'ALIVE');
+  assert.equal(heartbeat[5], 'DEGRADED');
+  assert.equal(heartbeat[6], 'FAIL');
+  assert.equal(heartbeat[9], 'HERMES_DNS_ERROR');
+});
+
+test('builds ALIVE heartbeat after recovery', () => {
+  const heartbeat = buildHeartbeatRow(
+    { workerVersion: '0.4.0', workerCommit: 'test' },
+    { queueDepth: 0, lastError: '' },
+    '2026-07-26T06:01:00.000Z',
+  );
+  assert.equal(heartbeat[4], 'ALIVE');
+  assert.equal(heartbeat[5], 'ALIVE');
+  assert.equal(heartbeat[6], 'PASS');
+  assert.equal(heartbeat[9], '');
 });
