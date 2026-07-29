@@ -224,6 +224,7 @@ class TalkFlowRoutesV2Tests(unittest.TestCase):
         )
         self.assertEqual(result.status, "PASS_WITH_WARNING")
         self.assertEqual(result.items_read, 0)
+        self.assertIn("sync_tab_empty", result.summary["warnings"])
 
     def test_11_ops_unresolved_high_is_fail(self):
         result = routes.evaluate_ops_health(
@@ -244,7 +245,104 @@ class TalkFlowRoutesV2Tests(unittest.TestCase):
         self.assertEqual(result.status, "FAIL")
         self.assertIn("unresolved_high_error", result.summary["failures"])
 
-    def test_12_run_log_append_has_exactly_ten_columns(self):
+    def test_12_explicit_uat_high_error_is_excluded_from_production_health(self):
+        result = routes.evaluate_ops_health(
+            sheet(routes.SYNC_JOBS_HEADERS),
+            sheet(routes.BACKUP_LOGS_HEADERS),
+            sheet(
+                routes.ERROR_LOGS_HEADERS,
+                row_for(
+                    routes.ERROR_LOGS_HEADERS,
+                    error_id="UAT-ERR-1",
+                    context_json='{"uat":true,"excludeDocuments":true}',
+                    severity="HIGH",
+                    occurred_at="2026-07-25T07:00:00+07:00",
+                    status="OPEN",
+                ),
+            ),
+            current_time=datetime(2026, 7, 25, 8, 0, tzinfo=routes.LOCAL_TZ),
+        )
+        self.assertEqual(result.status, "PASS_WITH_WARNING")
+        self.assertEqual(result.items_read, 1)
+        self.assertEqual(result.summary["error_records"], 1)
+        self.assertEqual(result.summary["production_error_records"], 0)
+        self.assertEqual(result.summary["excluded_uat_error_records"], 1)
+        self.assertNotIn("unresolved_high_error", result.summary["failures"])
+        self.assertNotIn("error_tab_empty", result.summary["warnings"])
+
+    def test_13_uat_string_true_is_fail_closed(self):
+        result = routes.evaluate_ops_health(
+            sheet(routes.SYNC_JOBS_HEADERS),
+            sheet(routes.BACKUP_LOGS_HEADERS),
+            sheet(
+                routes.ERROR_LOGS_HEADERS,
+                row_for(
+                    routes.ERROR_LOGS_HEADERS,
+                    error_id="ERR-STRING-UAT",
+                    context_json='{"uat":"true"}',
+                    severity="HIGH",
+                    occurred_at="2026-07-25T07:00:00+07:00",
+                    status="OPEN",
+                ),
+            ),
+            current_time=datetime(2026, 7, 25, 8, 0, tzinfo=routes.LOCAL_TZ),
+        )
+        self.assertEqual(result.status, "FAIL")
+        self.assertEqual(result.summary["excluded_uat_error_records"], 0)
+        self.assertIn("unresolved_high_error", result.summary["failures"])
+
+    def test_14_invalid_context_json_is_fail_closed(self):
+        result = routes.evaluate_ops_health(
+            sheet(routes.SYNC_JOBS_HEADERS),
+            sheet(routes.BACKUP_LOGS_HEADERS),
+            sheet(
+                routes.ERROR_LOGS_HEADERS,
+                row_for(
+                    routes.ERROR_LOGS_HEADERS,
+                    error_id="ERR-BAD-JSON",
+                    context_json='{not-json',
+                    severity="CRITICAL",
+                    occurred_at="2026-07-25T07:00:00+07:00",
+                    status="OPEN",
+                ),
+            ),
+            current_time=datetime(2026, 7, 25, 8, 0, tzinfo=routes.LOCAL_TZ),
+        )
+        self.assertEqual(result.status, "FAIL")
+        self.assertEqual(result.summary["excluded_uat_error_records"], 0)
+        self.assertIn("unresolved_critical_error", result.summary["failures"])
+
+    def test_15_uat_rows_do_not_hide_production_failure(self):
+        result = routes.evaluate_ops_health(
+            sheet(routes.SYNC_JOBS_HEADERS),
+            sheet(routes.BACKUP_LOGS_HEADERS),
+            sheet(
+                routes.ERROR_LOGS_HEADERS,
+                row_for(
+                    routes.ERROR_LOGS_HEADERS,
+                    error_id="UAT-ERR",
+                    context_json='{"uat":true}',
+                    severity="HIGH",
+                    occurred_at="2026-07-25T07:00:00+07:00",
+                    status="OPEN",
+                ),
+                row_for(
+                    routes.ERROR_LOGS_HEADERS,
+                    error_id="PROD-ERR",
+                    context_json='{"uat":false}',
+                    severity="HIGH",
+                    occurred_at="2026-07-25T07:30:00+07:00",
+                    status="OPEN",
+                ),
+            ),
+            current_time=datetime(2026, 7, 25, 8, 0, tzinfo=routes.LOCAL_TZ),
+        )
+        self.assertEqual(result.status, "FAIL")
+        self.assertEqual(result.summary["excluded_uat_error_records"], 1)
+        self.assertEqual(result.summary["production_error_records"], 1)
+        self.assertIn("unresolved_high_error", result.summary["failures"])
+
+    def test_16_run_log_append_has_exactly_ten_columns(self):
         api = FakeValuesApi()
         gateway = routes.SheetsGateway(FakeService(api))
         row = ["RUN-X", routes.ROUTE_DUE_CHECK, "", "", "PASS", 1, "", "", "", "ok"]
@@ -253,7 +351,7 @@ class TalkFlowRoutesV2Tests(unittest.TestCase):
         self.assertEqual(api.append_kwargs["spreadsheetId"], routes.CONTROL_SPREADSHEET_ID)
         self.assertEqual(api.append_kwargs["range"], routes.RUN_LOG_RANGE)
 
-    def test_13_run_log_read_back_verifies_written_row(self):
+    def test_17_run_log_read_back_verifies_written_row(self):
         api = FakeValuesApi()
         gateway = routes.SheetsGateway(FakeService(api))
         row = ["RUN-X", routes.ROUTE_DUE_CHECK, "", "", "PASS", 1, "", "", "", "ok"]
@@ -266,12 +364,12 @@ class TalkFlowRoutesV2Tests(unittest.TestCase):
         with self.assertRaises(routes.ContractError):
             gateway.append_and_verify_run_log(row)
 
-    def test_14_runner_has_no_telegram_dependency_or_call(self):
+    def test_18_runner_has_no_telegram_dependency_or_call(self):
         source = MODULE_PATH.read_text(encoding="utf-8").lower()
         self.assertNotIn("telegram", source)
         self.assertNotIn("sendmessage", source)
 
-    def test_15_runner_never_writes_source_databases(self):
+    def test_19_runner_never_writes_source_databases(self):
         values = sheet(
             routes.WORK_ITEMS_HEADERS,
             row_for(
