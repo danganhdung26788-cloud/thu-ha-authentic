@@ -148,6 +148,23 @@ def _parse_datetime(value: Any) -> datetime | None:
     return None
 
 
+def _is_explicit_uat_error(row: Mapping[str, Any]) -> bool:
+    """Return True only for a valid JSON object with exact Boolean ``uat: true``.
+
+    The check is intentionally fail-closed: invalid JSON, non-object JSON, or a
+    string value such as ``"true"`` remains production-visible.
+    """
+
+    context_text = _text(row.get("context_json"))
+    if not context_text:
+        return False
+    try:
+        context = json.loads(context_text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return isinstance(context, dict) and context.get("uat") is True
+
+
 def validate_header(actual: Sequence[Any], expected: Sequence[str], label: str) -> None:
     normalized_actual = tuple(_text(value) for value in actual)
     if normalized_actual != tuple(expected):
@@ -278,11 +295,15 @@ def evaluate_ops_health(
     sync_records = rows_as_dicts(sync_values, SYNC_JOBS_HEADERS, "SYNC_JOBS")
     backup_records = rows_as_dicts(backup_values, BACKUP_LOGS_HEADERS, "BACKUP_LOGS")
     error_records = rows_as_dicts(error_values, ERROR_LOGS_HEADERS, "ERROR_LOGS")
+    production_error_records = [
+        row for row in error_records if not _is_explicit_uat_error(row)
+    ]
+    excluded_uat_error_records = len(error_records) - len(production_error_records)
     items_read = len(sync_records) + len(backup_records) + len(error_records)
     failures: list[str] = []
     warnings: list[str] = []
 
-    for row in error_records:
+    for row in production_error_records:
         severity = _normalized(row["severity"])
         status = _normalized(row["status"])
         resolved = bool(_text(row["resolved_at"]) or _text(row["resolved_by"])) or status in RESOLVED_STATUSES
@@ -291,6 +312,7 @@ def evaluate_ops_health(
 
     latest_sync = _latest(sync_records, ("completed_at", "started_at"))
     latest_backup = _latest(backup_records, ("completed_at", "started_at"))
+    latest_production_error = _latest(production_error_records, ("occurred_at",))
     if latest_sync and _normalized(latest_sync["status"]) in FAILED_STATUSES:
         failures.append("latest_sync_failed")
     if latest_backup and _normalized(latest_backup["status"]) in FAILED_STATUSES:
@@ -303,9 +325,16 @@ def evaluate_ops_health(
     for label, records, latest_row, fields in (
         ("sync", sync_records, latest_sync, ("completed_at", "started_at")),
         ("backup", backup_records, latest_backup, ("completed_at", "started_at")),
-        ("error", error_records, _latest(error_records, ("occurred_at",)), ("occurred_at",)),
+        (
+            "error",
+            production_error_records,
+            latest_production_error,
+            ("occurred_at",),
+        ),
     ):
         if not records:
+            if label == "error" and excluded_uat_error_records:
+                continue
             warnings.append(f"{label}_tab_empty")
             continue
         latest_time = next(
@@ -331,6 +360,8 @@ def evaluate_ops_health(
             "sync_records": len(sync_records),
             "backup_records": len(backup_records),
             "error_records": len(error_records),
+            "production_error_records": len(production_error_records),
+            "excluded_uat_error_records": excluded_uat_error_records,
             "failures": sorted(set(failures)),
             "warnings": sorted(set(warnings)),
         },
