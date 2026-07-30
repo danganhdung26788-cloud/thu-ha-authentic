@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import unittest
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -42,12 +42,17 @@ def child(subtask_id: str, work_id: str, **values: str) -> dict[str, str]:
 
 
 class FakeRepo:
-    def __init__(self, works=None, children=None):
+    """Sheets-like UAT fake: row numbers, batch mutation and read-after-write."""
+    def __init__(self, works=None, children=None, assignees=None):
         self.works = deepcopy(works or [])
         self.children = deepcopy(children or [])
         self.actions: list[dict[str, str]] = []
         self.activities: list[dict[str, str]] = []
         self.write_count = 0
+        self.assignees = list(assignees or ["Nguyễn Văn A", "Trần Thị B"])
+        self.fail_plan_after: int | None = None
+        self.fail_compensation = False
+        self.plan_snapshots = {}
 
     def read_work_items(self):
         return deepcopy(self.works)
@@ -60,6 +65,9 @@ class FakeRepo:
 
     def read_activity(self):
         return deepcopy(self.activities)
+
+    def read_assignees(self):
+        return list(self.assignees)
 
     @staticmethod
     def _update(records, row_number, fields):
@@ -101,6 +109,52 @@ class FakeRepo:
         self.activities.append(row)
         return deepcopy(row)
 
+    def apply_mutation_plan(self, plan):
+        snapshots = (deepcopy(self.works), deepcopy(self.children))
+        self.plan_snapshots[id(plan)] = snapshots
+        applied = 0
+        try:
+            for mutation in plan.mutations:
+                if self.fail_plan_after is not None and applied >= self.fail_plan_after:
+                    raise RuntimeError("injected partial batch failure")
+                if mutation.sheet == "WORK_ITEMS" and mutation.is_new:
+                    row = work(
+                        mutation.key_value, _ROW_NUMBER=str(mutation.row_number),
+                    )
+                    row.update(mutation.after)
+                    self.works.append(row)
+                elif mutation.sheet == "WORK_ITEMS":
+                    self._update(self.works, mutation.row_number, mutation.after)
+                else:
+                    self._update(self.children, mutation.row_number, mutation.after)
+                self.write_count += 1
+                applied += 1
+        except Exception as exc:
+            try:
+                self.compensate_mutation_plan(plan)
+            except Exception as rollback_exc:
+                raise checklist.NeedsReconciliationError(str(rollback_exc)) from exc
+            raise checklist.MutationRolledBackError(str(exc)) from exc
+
+    def compensate_mutation_plan(self, plan):
+        if self.fail_compensation:
+            raise RuntimeError("injected compensation failure")
+        snapshots = self.plan_snapshots.get(id(plan))
+        if snapshots is None:
+            # Compensation after post-mutation audit/action failure.
+            for mutation in reversed(plan.mutations):
+                if mutation.is_new:
+                    self.works = [
+                        row for row in self.works
+                        if row.get(mutation.key_field) != mutation.key_value
+                    ]
+                elif mutation.sheet == "WORK_ITEMS":
+                    self._update(self.works, mutation.row_number, mutation.before)
+                else:
+                    self._update(self.children, mutation.row_number, mutation.before)
+            return
+        self.works, self.children = deepcopy(snapshots)
+
 
 class FakeTelegram:
     def __init__(self):
@@ -116,6 +170,16 @@ class FakeTelegram:
 
 
 class TaskChecklistTests(unittest.TestCase):
+    def setUp(self):
+        self.env = patch.dict(
+            os.environ,
+            {"HERMES_TASK_OWNER_USER_ID": "42", "HERMES_TASK_CHAT_ID": "1"},
+        )
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+
     def test_sheet_parser_ignores_fully_blank_formatted_rows(self):
         values = [
             list(checklist.SUBTASK_HEADERS),
@@ -150,6 +214,15 @@ class TaskChecklistTests(unittest.TestCase):
             {button["callback_data"].split(":")[1] for button in buttons},
         )
         self.assertTrue(all("callback_data" in button for button in buttons))
+
+    def test_sync_keyboard_has_only_detail_and_safe_sync(self):
+        rows = checklist.callback_keyboard(
+            "CV-2026-0013", sync_required=True,
+        )["inline_keyboard"]
+        self.assertEqual(
+            {"d", "s"},
+            {button["callback_data"].split(":")[1] for row in rows for button in row},
+        )
 
     def test_issue_39_consistency_fixture_is_detected_and_not_overdue(self):
         works = [
@@ -196,20 +269,40 @@ class TaskChecklistTests(unittest.TestCase):
         repo = FakeRepo([work("CV-1")])
         with self.assertRaises(PermissionError):
             checklist.process_callback(
-                repo, callback_id="cb-1", username="other", chat_id="1",
+                repo, callback_id="cb-1", user_id="99", username="danganhdung", chat_id="1",
                 thread_id="", data="ht:w:CV-1",
+            )
+        self.assertEqual(0, repo.write_count)
+
+    def test_correct_username_with_wrong_numeric_id_is_rejected(self):
+        repo = FakeRepo([work("CV-1")])
+        with self.assertRaises(PermissionError):
+            checklist.process_callback(
+                repo, callback_id="cb-owner", user_id="999",
+                username="danganhdung", chat_id="1", thread_id="",
+                data="ht:w:CV-1",
+            )
+        self.assertEqual(0, repo.write_count)
+
+    def test_wrong_chat_id_is_rejected(self):
+        repo = FakeRepo([work("CV-1")])
+        with self.assertRaises(PermissionError):
+            checklist.process_callback(
+                repo, callback_id="cb-chat", user_id="42",
+                username="danganhdung", chat_id="999", thread_id="",
+                data="ht:w:CV-1",
             )
         self.assertEqual(0, repo.write_count)
 
     def test_callback_duplicate_is_idempotent_without_duplicate_audit_or_update(self):
         repo = FakeRepo([work("CV-1", STATUS="NEW")])
         first = checklist.process_callback(
-            repo, callback_id="cb-1", username="danganhdung", chat_id="1",
+            repo, callback_id="cb-1", user_id="42", username="danganhdung", chat_id="1",
             thread_id="", data="ht:w:CV-1",
         )
         count_after_first = repo.write_count
         second = checklist.process_callback(
-            repo, callback_id="cb-2", username="danganhdung", chat_id="1",
+            repo, callback_id="cb-2", user_id="42", username="danganhdung", chat_id="1",
             thread_id="", data="ht:w:CV-1",
         )
         self.assertFalse(first["idempotent"])
@@ -226,7 +319,7 @@ class TaskChecklistTests(unittest.TestCase):
             ("cb-wait-2", "ht:h:CV-1"),
         ):
             result = checklist.process_callback(
-                repo, callback_id=callback_id, username="danganhdung",
+                repo, callback_id=callback_id, user_id="42", username="danganhdung",
                 chat_id="1", thread_id="", data=data,
             )
             self.assertFalse(result["idempotent"])
@@ -245,7 +338,7 @@ class TaskChecklistTests(unittest.TestCase):
             ],
         )
         result = checklist.process_callback(
-            repo, callback_id="cb-complete", username="danganhdung",
+            repo, callback_id="cb-complete", user_id="42", username="danganhdung",
             chat_id="1", thread_id="", data="ht:c:CV-2026-0013",
         )
         parent = repo.works[0]
@@ -268,7 +361,7 @@ class TaskChecklistTests(unittest.TestCase):
             ],
         )
         result = checklist.process_callback(
-            repo, callback_id="cb-continue", username="danganhdung",
+            repo, callback_id="cb-continue", user_id="42", username="danganhdung",
             chat_id="1", thread_id="", data="ht:c:CV-2026-0013",
         )
         detached = result["result"]["detached_work_ids"]
@@ -277,11 +370,82 @@ class TaskChecklistTests(unittest.TestCase):
         self.assertEqual(detached[0], repo.works[1]["WORK_ID"])
         self.assertIn(f"DETACHED_TO={detached[0]}", repo.children[0]["NOTE"])
 
+    def test_partial_child_failure_is_compensated_and_never_reports_success(self):
+        parent = work("CV-1", STATUS="IN_PROGRESS", NEXT_ACTION="Tiếp tục")
+        children = [
+            child("ST-1", "CV-1", _ROW_NUMBER="2"),
+            child("ST-2", "CV-1", _ROW_NUMBER="3"),
+        ]
+        repo = FakeRepo([parent], children)
+        repo.fail_plan_after = 1
+        with self.assertRaises(checklist.MutationRolledBackError):
+            checklist.process_callback(
+                repo, callback_id="cb-partial", user_id="42",
+                username="danganhdung", chat_id="1", thread_id="",
+                data="ht:c:CV-1",
+            )
+        self.assertEqual("IN_PROGRESS", repo.works[0]["STATUS"])
+        self.assertEqual(
+            ["DANG_THUC_HIEN", "DANG_THUC_HIEN"],
+            [item["STATUS"] for item in repo.children],
+        )
+        self.assertEqual("FAILED", repo.actions[0]["STATUS"])
+        self.assertFalse(repo.activities)
+
+    def test_failed_compensation_marks_action_for_reconciliation(self):
+        repo = FakeRepo(
+            [work("CV-1")],
+            [child("ST-1", "CV-1")],
+        )
+        repo.fail_plan_after = 1
+        repo.fail_compensation = True
+        with self.assertRaises(checklist.NeedsReconciliationError):
+            checklist.process_callback(
+                repo, callback_id="cb-reconcile", user_id="42",
+                username="danganhdung", chat_id="1", thread_id="",
+                data="ht:c:CV-1",
+            )
+        self.assertEqual("NEEDS_RECONCILIATION", repo.actions[0]["STATUS"])
+
+    def test_duplicate_work_id_cannot_mutate_but_can_be_safely_inspected(self):
+        repo = FakeRepo([
+            work("CV-DUP", _ROW_NUMBER="2"),
+            work("CV-DUP", _ROW_NUMBER="3"),
+        ])
+        with self.assertRaises(checklist.ContractError):
+            checklist.process_callback(
+                repo, callback_id="cb-mut", user_id="42",
+                username="danganhdung", chat_id="1", thread_id="",
+                data="ht:w:CV-DUP",
+            )
+        self.assertFalse(repo.actions)
+        result = checklist.process_callback(
+            repo, callback_id="cb-sync", user_id="42",
+            username="display-only", chat_id="1", thread_id="",
+            data="ht:s:CV-DUP",
+        )
+        self.assertEqual(2, len(result["result"]["matches"]))
+        self.assertEqual("SAFE_SYNC_REVIEW", result["result"]["status"])
+
+    def test_vietnam_date_boundary_uses_zoneinfo(self):
+        self.assertEqual(
+            date(2026, 7, 29),
+            checklist.today_vn(datetime(2026, 7, 29, 16, 30, tzinfo=timezone.utc)),
+        )
+        self.assertEqual(
+            date(2026, 7, 30),
+            checklist.today_vn(datetime(2026, 7, 29, 17, 30, tzinfo=timezone.utc)),
+        )
+        self.assertEqual(
+            date(2026, 7, 31),
+            checklist.today_vn(datetime(2026, 7, 30, 17, 30, tzinfo=timezone.utc)),
+        )
+
     def test_postpone_and_transfer_require_input_instead_of_guessing(self):
         for data in ("ht:p:CV-1", "ht:t:CV-1"):
             repo = FakeRepo([work("CV-1")])
             result = checklist.process_callback(
-                repo, callback_id=data, username="danganhdung", chat_id="1",
+                repo, callback_id=data, user_id="42", username="danganhdung", chat_id="1",
                 thread_id="", data=data,
             )
             self.assertEqual("NEEDS_INPUT", result["result"]["status"])
@@ -295,31 +459,11 @@ class TaskChecklistTests(unittest.TestCase):
         repo = BrokenRepo([work("CV-1")])
         with self.assertRaises(checklist.ContractError):
             checklist.process_callback(
-                repo, callback_id="cb", username="danganhdung", chat_id="1",
+                repo, callback_id="cb", user_id="42", username="danganhdung", chat_id="1",
                 thread_id="", data="ht:h:CV-1",
             )
         self.assertFalse(repo.activities)
         self.assertEqual("FAILED", repo.actions[0]["STATUS"])
-
-    def test_webhook_secret_and_owner_callback_smoke_without_live_writes(self):
-        repo = FakeRepo([work("CV-1")])
-        telegram = FakeTelegram()
-        payload = {
-            "callback_query": {
-                "id": "cb-smoke",
-                "from": {"username": "danganhdung"},
-                "data": "ht:d:CV-1",
-                "message": {"chat": {"id": 123}, "message_thread_id": 7},
-            }
-        }
-        with patch.dict(os.environ, {"HERMES_TASK_CALLBACK_SECRET": "test-secret"}):
-            result = checklist.handle_telegram_update(
-                payload, secret_header="test-secret", repo=repo, telegram=telegram,
-            )
-        self.assertTrue(result["ok"])
-        self.assertEqual(1, len(telegram.answers))
-        self.assertEqual(1, len(repo.actions))
-        self.assertEqual(1, len(repo.activities))
 
     def test_send_digest_emits_task_cards_with_callbacks(self):
         repo = FakeRepo(
@@ -353,7 +497,7 @@ class TaskChecklistTests(unittest.TestCase):
             [child("ST-1", "CV-1", STATUS="DANG_THUC_HIEN")],
         )
         result = checklist.process_callback(
-            repo, callback_id="cb-child", username="danganhdung",
+            repo, callback_id="cb-child", user_id="42", username="danganhdung",
             chat_id="1", thread_id="", data="ht:c:ST-1",
         )
         self.assertEqual("HOAN_THANH", result["result"]["status"])

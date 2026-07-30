@@ -5,7 +5,10 @@ Gói này loại n8n khỏi đường vận hành. n8n chỉ còn là tài liệ
 ## Phạm vi
 
 - `telegram_dispatcher.py`: đọc `TELEGRAM_QUEUE`, gửi Telegram theo topic, chống gửi lặp bằng SQLite, cập nhật hàng đợi và append `RUN_LOG`.
-- `task_checklist.py`: bản tin chỉ gồm nhiệm vụ, consistency check cha–con và callback Telegram owner-scoped có TaskFlow read-back.
+- `task_checklist.py`: bản tin chỉ gồm nhiệm vụ, consistency check cha–con và
+  mutation TaskFlow có read-back/bù trừ.
+- `task_checklist_polling.py`: state machine Lùi hạn/Chuyển việc dùng ngay
+  callback và message của một bot Hermes đang chạy `getUpdates`; không webhook.
 - `meta_messenger_bridge.py`: xác minh webhook Meta GET/POST, kiểm tra `X-Hub-Signature-256`, chống trùng `message.mid`, bỏ qua echo/delivery/read và ghi tin nhắn văn bản vào `FANPAGE_QUEUE`.
 - Chế độ phản hồi giữ nguyên `DRAFT_ONLY`; adapter Meta chưa tự gửi câu trả lời AI.
 - Không ghi database bán hàng nguồn.

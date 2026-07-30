@@ -7,15 +7,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import hmac
 import json
 import os
 import re
 import threading
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Protocol, Sequence
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -23,7 +24,7 @@ TASKFLOW_SPREADSHEET_ID = os.getenv(
     "TASKFLOW_SPREADSHEET_ID",
     "1l2P0qqojyEKXAiL4cOTwRgJ_1oV5WJQgIQ3mW9zDc48",
 ).strip()
-TELEGRAM_OWNER_USERNAME = "danganhdung"
+VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 WORK_ITEMS_HEADERS = (
     "WORK_ID", "CLIENT_REQUEST_ID", "TITLE", "DESCRIPTION", "CATEGORY",
@@ -53,6 +54,7 @@ ACTIVITY_HEADERS = (
     "LOG_ID", "WORK_ID", "ACTION", "DETAILS_JSON", "ACTOR_EMAIL",
     "CREATED_AT", "EVENT_TYPE", "OLD_VALUE", "NEW_VALUE", "NOTE", "SOURCE",
 )
+USERS_HEADERS = ("EMAIL", "FULL_NAME", "ROLE", "UNIT", "ACTIVE", "CREATED_AT")
 
 TERMINAL_PARENT_STATUSES = {
     "COMPLETED", "CANCELLED", "CANCELED", "MERGED", "NOT_DONE",
@@ -76,6 +78,7 @@ ACTION_CODES = {
     "n": "NOT_DONE",
     "t": "TRANSFER",
     "d": "DETAIL",
+    "s": "SAFE_SYNC",
 }
 ACTION_BUTTONS = (
     ("✅ Hoàn thành", "c"),
@@ -86,7 +89,7 @@ ACTION_BUTTONS = (
     ("↪️ Chuyển việc", "t"),
     ("ℹ️ Chi tiết", "d"),
 )
-PROCESSOR_VERSION = "issue-39-v1"
+PROCESSOR_VERSION = "issue-39-v2-polling"
 CONTINUE_MARKER = "CONTINUE_AFTER_PARENT=TRUE"
 CALLBACK_LOCK = threading.Lock()
 
@@ -95,8 +98,23 @@ class ContractError(RuntimeError):
     """Raised when a live sheet or read-back violates the locked contract."""
 
 
+class MutationRolledBackError(ContractError):
+    """Raised when a failed parent mutation was fully compensated."""
+
+
+class NeedsReconciliationError(ContractError):
+    """Raised when mutation compensation could not be proven by read-back."""
+
+
 def now_iso() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    return datetime.now(VN_TZ).isoformat(timespec="seconds")
+
+
+def today_vn(moment: datetime | None = None) -> date:
+    current = moment or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        raise ValueError("moment must be timezone-aware")
+    return current.astimezone(VN_TZ).date()
 
 
 def normalize_status(value: Any) -> str:
@@ -150,17 +168,39 @@ class Digest:
     consistency: tuple[ConsistencyIssue, ...]
 
 
+@dataclass(frozen=True)
+class CellMutation:
+    sheet: str
+    row_number: int
+    key_field: str
+    key_value: str
+    before: Mapping[str, str]
+    after: Mapping[str, str]
+    is_new: bool = False
+
+
+@dataclass(frozen=True)
+class ParentMutationPlan:
+    parent_id: str
+    mutations: tuple[CellMutation, ...]
+    closed_subtasks: tuple[str, ...]
+    detached_work_ids: tuple[str, ...]
+
+
 class TaskRepository(Protocol):
     def read_work_items(self) -> list[dict[str, str]]: ...
     def read_subtasks(self) -> list[dict[str, str]]: ...
     def read_actions(self) -> list[dict[str, str]]: ...
     def read_activity(self) -> list[dict[str, str]]: ...
+    def read_assignees(self) -> list[str]: ...
     def update_work(self, row_number: int, fields: Mapping[str, str]) -> None: ...
     def update_subtask(self, row_number: int, fields: Mapping[str, str]) -> None: ...
     def update_action(self, row_number: int, fields: Mapping[str, str]) -> None: ...
     def append_work(self, fields: Mapping[str, str]) -> dict[str, str]: ...
     def append_action(self, fields: Mapping[str, str]) -> dict[str, str]: ...
     def append_activity(self, fields: Mapping[str, str]) -> dict[str, str]: ...
+    def apply_mutation_plan(self, plan: ParentMutationPlan) -> None: ...
+    def compensate_mutation_plan(self, plan: ParentMutationPlan) -> None: ...
 
 
 class SheetsTaskRepository:
@@ -171,6 +211,7 @@ class SheetsTaskRepository:
         "SUBTASKS": SUBTASK_HEADERS,
         "HERMES_ACTION_QUEUE": ACTION_QUEUE_HEADERS,
         "ACTIVITY_LOG": ACTIVITY_HEADERS,
+        "USERS": USERS_HEADERS,
     }
 
     def __init__(self, spreadsheet_id: str = TASKFLOW_SPREADSHEET_ID, service: Any | None = None):
@@ -257,6 +298,14 @@ class SheetsTaskRepository:
     def read_activity(self) -> list[dict[str, str]]:
         return self._read("ACTIVITY_LOG")
 
+    def read_assignees(self) -> list[str]:
+        return sorted({
+            row.get("FULL_NAME", "").strip()
+            for row in self._read("USERS")
+            if row.get("FULL_NAME", "").strip()
+            and normalize_status(row.get("ACTIVE")) in {"TRUE", "YES", "1", "ACTIVE"}
+        })
+
     def update_work(self, row_number: int, fields: Mapping[str, str]) -> None:
         self._update("WORK_ITEMS", row_number, fields)
 
@@ -275,11 +324,158 @@ class SheetsTaskRepository:
     def append_activity(self, fields: Mapping[str, str]) -> dict[str, str]:
         return self._append("ACTIVITY_LOG", fields, "LOG_ID")
 
+    def _mutation_data(
+        self, mutation: CellMutation, values: Mapping[str, str],
+    ) -> list[dict[str, Any]]:
+        headers = self.SHEETS[mutation.sheet]
+        return [
+            {
+                "range": (
+                    f"{mutation.sheet}!"
+                    f"{self._column(headers.index(key) + 1)}{mutation.row_number}"
+                ),
+                "values": [[value]],
+            }
+            for key, value in values.items()
+        ]
+
+    def _verify_plan(self, plan: ParentMutationPlan, *, after: bool) -> None:
+        cache: dict[str, list[dict[str, str]]] = {}
+        for mutation in plan.mutations:
+            if mutation.sheet not in cache:
+                cache[mutation.sheet] = self._read(mutation.sheet)
+            if mutation.is_new and not after:
+                if any(
+                    row.get(mutation.key_field, "").strip() == mutation.key_value
+                    for row in cache[mutation.sheet]
+                ):
+                    raise ContractError(
+                        f"{mutation.sheet} key already exists: {mutation.key_value}"
+                    )
+                continue
+            matches = [
+                row for row in cache[mutation.sheet]
+                if int(row["_ROW_NUMBER"]) == mutation.row_number
+            ]
+            if not matches:
+                raise ContractError(
+                    f"{mutation.sheet} row {mutation.row_number} missing during read-back"
+                )
+            expected = mutation.after if after else mutation.before
+            if any(
+                str(matches[0].get(key, "")).strip() != str(value).strip()
+                for key, value in expected.items()
+            ):
+                raise ContractError(
+                    f"{mutation.sheet} row {mutation.row_number} mutation read-back mismatch"
+                )
+
+    def apply_mutation_plan(self, plan: ParentMutationPlan) -> None:
+        self._verify_plan(plan, after=False)
+        data = [
+            item
+            for mutation in plan.mutations
+            for item in self._mutation_data(mutation, mutation.after)
+        ]
+        try:
+            self.service.spreadsheets().values().batchUpdate(
+                spreadsheetId=self.spreadsheet_id,
+                body={"valueInputOption": "RAW", "data": data},
+            ).execute()
+            self._verify_plan(plan, after=True)
+        except Exception as exc:
+            try:
+                self.compensate_mutation_plan(plan)
+            except Exception as rollback_exc:
+                raise NeedsReconciliationError(
+                    f"Parent mutation failed and compensation is unverified: {rollback_exc}"
+                ) from exc
+            raise MutationRolledBackError(
+                f"Parent mutation failed and was compensated: {exc}"
+            ) from exc
+
+    def compensate_mutation_plan(self, plan: ParentMutationPlan) -> None:
+        cache = {
+            sheet: self._read(sheet)
+            for sheet in {mutation.sheet for mutation in plan.mutations}
+        }
+        reversible: list[tuple[CellMutation, Mapping[str, str]]] = []
+        for mutation in reversed(plan.mutations):
+            current = next(
+                (
+                    row for row in cache[mutation.sheet]
+                    if int(row["_ROW_NUMBER"]) == mutation.row_number
+                ),
+                None,
+            )
+            if mutation.is_new:
+                if current is None:
+                    continue
+                current_key = current.get(mutation.key_field, "").strip()
+                if not current_key:
+                    continue
+                if current_key != mutation.key_value:
+                    raise ContractError(
+                        "Refusing to clear a new row now owned by another record"
+                    )
+                reversible.append(
+                    (mutation, {key: "" for key in mutation.after})
+                )
+                continue
+            if current is None:
+                raise ContractError("Existing mutation row disappeared")
+            current_values = {
+                key: current.get(key, "").strip() for key in mutation.after
+            }
+            after_values = {
+                key: str(value).strip() for key, value in mutation.after.items()
+            }
+            before_values = {
+                key: str(mutation.before.get(key, "")).strip()
+                for key in mutation.after
+            }
+            if current_values == before_values:
+                continue
+            if current_values != after_values:
+                raise ContractError(
+                    "Refusing compensation because a row changed concurrently"
+                )
+            reversible.append((mutation, mutation.before))
+        data = [
+            item
+            for mutation, values in reversible
+            for item in self._mutation_data(mutation, values)
+        ]
+        if data:
+            self.service.spreadsheets().values().batchUpdate(
+                spreadsheetId=self.spreadsheet_id,
+                body={"valueInputOption": "RAW", "data": data},
+            ).execute()
+        # New rows are cleared; existing rows must exactly match their snapshot.
+        existing = ParentMutationPlan(
+            plan.parent_id,
+            tuple(item for item in plan.mutations if not item.is_new),
+            plan.closed_subtasks,
+            plan.detached_work_ids,
+        )
+        self._verify_plan(existing, after=False)
+        for mutation in (item for item in plan.mutations if item.is_new):
+            rows = self._read(mutation.sheet)
+            row = next(
+                (item for item in rows if int(item["_ROW_NUMBER"]) == mutation.row_number),
+                None,
+            )
+            if row and any(row.get(header, "").strip() for header in self.SHEETS[mutation.sheet]):
+                raise ContractError("New row compensation read-back mismatch")
+
 
 def consistency_check(
     work_items: Sequence[dict[str, str]],
     subtasks: Sequence[dict[str, str]],
+    *,
+    today: date | None = None,
 ) -> list[ConsistencyIssue]:
+    effective_today = today or today_vn()
     issues: list[ConsistencyIssue] = []
     by_id: dict[str, list[dict[str, str]]] = {}
     for work in work_items:
@@ -316,7 +512,7 @@ def consistency_check(
                 due = parse_date(child.get("DUE_DATE"))
                 continued = CONTINUE_MARKER in child.get("NOTE", "").upper()
                 if (
-                    due and due < date.today()
+                    due and due < effective_today
                     and normalize_status(child.get("STATUS")) not in TERMINAL_SUBTASK_STATUSES
                     and not continued
                 ):
@@ -348,8 +544,8 @@ def build_digest(
     today: date | None = None,
     soon_days: int = 3,
 ) -> Digest:
-    today = today or date.today()
-    issues = consistency_check(work_items, subtasks)
+    today = today or today_vn()
+    issues = consistency_check(work_items, subtasks, today=today)
     groups: dict[str, list[dict[str, str]]] = {
         "QUÁ HẠN": [],
         "ĐẾN HẠN HÔM NAY": [],
@@ -364,7 +560,9 @@ def build_digest(
             continue
         status = normalize_status(work.get("STATUS"))
         if _work_has_sync_issue(work_id, issues):
-            groups["CẦN ĐỒNG BỘ DỮ LIỆU"].append(work)
+            sync_record = dict(work)
+            sync_record["_SYNC_REQUIRED"] = "TRUE"
+            groups["CẦN ĐỒNG BỘ DỮ LIỆU"].append(sync_record)
             continue
         if status in TERMINAL_PARENT_STATUSES:
             continue
@@ -441,7 +639,16 @@ def build_digest(
     )
 
 
-def callback_keyboard(work_id: str) -> dict[str, list[list[dict[str, str]]]]:
+def callback_keyboard(
+    work_id: str, *, sync_required: bool = False,
+) -> dict[str, list[list[dict[str, str]]]]:
+    if sync_required:
+        return {
+            "inline_keyboard": [[
+                {"text": "ℹ️ Chi tiết", "callback_data": f"ht:d:{work_id}"},
+                {"text": "🔎 Kiểm tra đồng bộ", "callback_data": f"ht:s:{work_id}"},
+            ]]
+        }
     rows: list[list[dict[str, str]]] = []
     for index in range(0, len(ACTION_BUTTONS), 2):
         row = [
@@ -487,11 +694,12 @@ class TelegramClient:
 
     def send_task(
         self, *, chat_id: str, thread_id: str, text: str, work_id: str,
+        sync_required: bool = False,
     ) -> str:
         payload: dict[str, Any] = {
             "chat_id": chat_id,
             "text": text,
-            "reply_markup": callback_keyboard(work_id),
+            "reply_markup": callback_keyboard(work_id, sync_required=sync_required),
             "disable_web_page_preview": True,
         }
         if thread_id:
@@ -530,6 +738,7 @@ def send_digest(
                 thread_id=thread_id,
                 text=format_task(work, group),
                 work_id=work_id,
+                sync_required=group == "CẦN ĐỒNG BỘ DỮ LIỆU",
             )
             seen.add(work_id)
             sent += 1
@@ -574,49 +783,117 @@ def _dedupe_key(
 
 def _detached_work_id(subtask_id: str, dedupe_key: str) -> str:
     suffix = hashlib.sha256(f"{subtask_id}:{dedupe_key}".encode("utf-8")).hexdigest()[:8].upper()
-    return f"CV-CONT-{datetime.now().strftime('%Y%m%d')}-{suffix}"
+    return f"CV-CONT-{datetime.now(VN_TZ).strftime('%Y%m%d')}-{suffix}"
 
 
-def _detach_child(
+def _plan_parent_terminal(
     repo: TaskRepository,
-    child: dict[str, str],
     parent: dict[str, str],
+    *,
+    action: str,
+    arguments: Mapping[str, Any],
     dedupe_key: str,
     timestamp: str,
-) -> str:
-    new_id = _detached_work_id(child["SUBTASK_ID"], dedupe_key)
-    existing = [row for row in repo.read_work_items() if row.get("WORK_ID") == new_id]
-    if not existing:
-        repo.append_work(
-            {
+) -> ParentMutationPlan:
+    works = repo.read_work_items()
+    children = [
+        row for row in repo.read_subtasks()
+        if row.get("WORK_ID", "").strip() == parent["WORK_ID"]
+    ]
+    explicit_continue = {
+        str(value).strip()
+        for value in arguments.get("continue_subtasks", [])
+        if str(value).strip()
+    }
+    mutations: list[CellMutation] = []
+    detached: list[str] = []
+    closed: list[str] = []
+    next_work_row = max((int(row["_ROW_NUMBER"]) for row in works), default=1) + 1
+    child_terminal = "HOAN_THANH" if action == "COMPLETE" else "KHONG_THUC_HIEN"
+    for child in children:
+        if normalize_status(child.get("STATUS")) in TERMINAL_SUBTASK_STATUSES:
+            continue
+        should_continue = (
+            child.get("SUBTASK_ID", "") in explicit_continue
+            or CONTINUE_MARKER in child.get("NOTE", "").upper()
+        )
+        if should_continue:
+            new_id = _detached_work_id(child["SUBTASK_ID"], dedupe_key)
+            if any(row.get("WORK_ID") == new_id for row in works):
+                raise ContractError(f"Detached WORK_ID already exists: {new_id}")
+            new_fields = {
                 "WORK_ID": new_id,
                 "TITLE": child.get("TITLE", ""),
-                "DESCRIPTION": f"Tách từ {child.get('SUBTASK_ID')} khi đóng {parent.get('WORK_ID')}",
+                "DESCRIPTION": (
+                    f"Tách từ {child.get('SUBTASK_ID')} "
+                    f"khi đóng {parent.get('WORK_ID')}"
+                ),
                 "DUE_DATE": child.get("DUE_DATE", ""),
                 "STATUS": "IN_PROGRESS",
                 "PROGRESS_PERCENT": "0",
-                "NEXT_ACTION": child.get("NOTE", "").replace(CONTINUE_MARKER, "").strip(),
+                "NEXT_ACTION": child.get("NOTE", "").replace(CONTINUE_MARKER, "").strip(" ;"),
                 "CREATED_BY": "HERMES",
                 "CREATED_AT": timestamp,
                 "UPDATED_BY": "HERMES",
                 "UPDATED_AT": timestamp,
                 "ACTIVE": "TRUE",
                 "SOURCE": "HERMES_PARENT_CLOSE",
-                "NOTE": f"DETACHED_FROM={child.get('SUBTASK_ID')};PARENT={parent.get('WORK_ID')}",
+                "NOTE": (
+                    f"DETACHED_FROM={child.get('SUBTASK_ID')};"
+                    f"PARENT={parent.get('WORK_ID')}"
+                ),
                 "REPORTABLE": "TRUE",
                 "WORK_KIND": "TASK",
             }
-        )
-    repo.update_subtask(
-        int(child["_ROW_NUMBER"]),
-        {
-            "STATUS": "HOAN_THANH",
-            "RESULT": f"Đã tách thành nhiệm vụ độc lập {new_id}",
+            mutations.append(CellMutation(
+                "WORK_ITEMS", next_work_row, "WORK_ID", new_id, {}, new_fields, True,
+            ))
+            next_work_row += 1
+            child_fields = {
+                "STATUS": "HOAN_THANH",
+                "RESULT": f"Đã tách thành nhiệm vụ độc lập {new_id}",
+                "UPDATED_AT": timestamp,
+                "NOTE": f"DETACHED_TO={new_id}; {child.get('NOTE', '')}".strip(),
+            }
+            mutations.append(CellMutation(
+                "SUBTASKS", int(child["_ROW_NUMBER"]), "SUBTASK_ID",
+                child["SUBTASK_ID"],
+                {key: child.get(key, "") for key in child_fields},
+                child_fields,
+            ))
+            detached.append(new_id)
+            continue
+        child_fields = {
+            "STATUS": child_terminal,
+            "RESULT": f"Hermes đóng theo nhiệm vụ cha {parent['WORK_ID']}",
             "UPDATED_AT": timestamp,
-            "NOTE": f"DETACHED_TO={new_id}; {child.get('NOTE', '')}".strip(),
-        },
+            "NOTE": f"PARENT_TERMINAL_ACTION={action}; {child.get('NOTE', '')}".strip(),
+        }
+        mutations.append(CellMutation(
+            "SUBTASKS", int(child["_ROW_NUMBER"]), "SUBTASK_ID",
+            child["SUBTASK_ID"],
+            {key: child.get(key, "") for key in child_fields},
+            child_fields,
+        ))
+        closed.append(child.get("SUBTASK_ID", ""))
+
+    parent_status = "COMPLETED" if action == "COMPLETE" else "NOT_DONE"
+    parent_fields = {
+        "STATUS": parent_status,
+        "PROGRESS_PERCENT": "100",
+        "NEXT_ACTION": "",
+        "UPDATED_BY": "HERMES",
+        "UPDATED_AT": timestamp,
+        "COMPLETED_AT": timestamp,
+    }
+    mutations.append(CellMutation(
+        "WORK_ITEMS", int(parent["_ROW_NUMBER"]), "WORK_ID", parent["WORK_ID"],
+        {key: parent.get(key, "") for key in parent_fields},
+        parent_fields,
+    ))
+    return ParentMutationPlan(
+        parent["WORK_ID"], tuple(mutations), tuple(closed), tuple(detached),
     )
-    return new_id
 
 
 def _apply_parent_terminal(
@@ -628,53 +905,17 @@ def _apply_parent_terminal(
     dedupe_key: str,
     timestamp: str,
 ) -> dict[str, Any]:
-    children = [
-        row for row in repo.read_subtasks()
-        if row.get("WORK_ID", "").strip() == parent["WORK_ID"]
-    ]
-    explicit_continue = {
-        str(value).strip()
-        for value in arguments.get("continue_subtasks", [])
-        if str(value).strip()
+    plan = _plan_parent_terminal(
+        repo, parent, action=action, arguments=arguments,
+        dedupe_key=dedupe_key, timestamp=timestamp,
+    )
+    repo.apply_mutation_plan(plan)
+    return {
+        "closed_subtasks": list(plan.closed_subtasks),
+        "detached_work_ids": list(plan.detached_work_ids),
+        "status": "COMPLETED" if action == "COMPLETE" else "NOT_DONE",
+        "_mutation_plan": plan,
     }
-    detached: list[str] = []
-    closed: list[str] = []
-    child_terminal = "HOAN_THANH" if action == "COMPLETE" else "KHONG_THUC_HIEN"
-    for child in children:
-        if normalize_status(child.get("STATUS")) in TERMINAL_SUBTASK_STATUSES:
-            continue
-        should_continue = (
-            child.get("SUBTASK_ID", "") in explicit_continue
-            or CONTINUE_MARKER in child.get("NOTE", "").upper()
-        )
-        if should_continue:
-            detached.append(_detach_child(repo, child, parent, dedupe_key, timestamp))
-            continue
-        repo.update_subtask(
-            int(child["_ROW_NUMBER"]),
-            {
-                "STATUS": child_terminal,
-                "RESULT": f"Hermes đóng theo nhiệm vụ cha {parent['WORK_ID']}",
-                "UPDATED_AT": timestamp,
-                "NOTE": f"PARENT_TERMINAL_ACTION={action}; {child.get('NOTE', '')}".strip(),
-            },
-        )
-        closed.append(child.get("SUBTASK_ID", ""))
-
-    parent_status = "COMPLETED" if action == "COMPLETE" else "NOT_DONE"
-    fields = {
-        "STATUS": parent_status,
-        "PROGRESS_PERCENT": "100",
-        "NEXT_ACTION": "",
-        "UPDATED_BY": "HERMES",
-        "UPDATED_AT": timestamp,
-        "COMPLETED_AT": timestamp,
-    }
-    repo.update_work(int(parent["_ROW_NUMBER"]), fields)
-    read_back = _find_work(repo, parent["WORK_ID"])
-    if any(read_back.get(key, "").strip() != value for key, value in fields.items()):
-        raise ContractError("Parent read-back mismatch")
-    return {"closed_subtasks": closed, "detached_work_ids": detached, "status": parent_status}
 
 
 def _apply_simple_action(
@@ -726,6 +967,11 @@ def _apply_subtask_action(
         assignee = str(arguments.get("assignee", "")).strip()
         if not assignee:
             raise ValueError("TRANSFER requires assignee")
+        valid = repo.read_assignees()
+        exact = next((name for name in valid if name.casefold() == assignee.casefold()), None)
+        if exact is None:
+            raise ValueError("TRANSFER assignee is not an active TaskFlow user")
+        assignee = exact
         fields = {"ASSIGNEE": assignee}
     elif action == "COMPLETE":
         fields = {"STATUS": "HOAN_THANH", "RESULT": "Hermes hoàn thành từ Telegram"}
@@ -785,21 +1031,47 @@ def _process_callback(
     repo: TaskRepository,
     *,
     callback_id: str,
+    user_id: str,
     username: str,
     chat_id: str,
     thread_id: str,
     data: str,
     arguments: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if username.strip().lower() != TELEGRAM_OWNER_USERNAME:
-        raise PermissionError("Callback owner is not allowed")
-    match = re.fullmatch(r"ht:([cwhpntd]):([A-Za-z0-9_-]{1,48})", data.strip())
+    expected_user = os.getenv("HERMES_TASK_OWNER_USER_ID", "").strip()
+    expected_chat = os.getenv("HERMES_TASK_CHAT_ID", "").strip()
+    if not expected_user or not expected_chat:
+        raise PermissionError("Numeric Telegram owner/chat authorization is not configured")
+    if str(user_id).strip() != expected_user:
+        raise PermissionError("Telegram numeric user ID is not allowed")
+    if str(chat_id).strip() != expected_chat:
+        raise PermissionError("Telegram chat ID is not allowed")
+    match = re.fullmatch(r"ht:([cwhpntds]):([A-Za-z0-9_-]{1,48})", data.strip())
     if not match:
         raise ValueError("Invalid callback data")
     action = ACTION_CODES[match.group(1)]
     work_id = match.group(2)
     arguments = dict(arguments or {})
-    task_kind, work = _find_task(repo, work_id)
+    works = [
+        row for row in repo.read_work_items()
+        if row.get("WORK_ID", "").strip() == work_id
+    ]
+    children = [
+        row for row in repo.read_subtasks()
+        if row.get("SUBTASK_ID", "").strip() == work_id
+    ]
+    if action not in {"DETAIL", "SAFE_SYNC"} and len(works) + len(children) != 1:
+        raise ContractError(
+            f"Mutation blocked for ambiguous task {work_id}: "
+            f"work={len(works)} subtask={len(children)}"
+        )
+    if action in {"DETAIL", "SAFE_SYNC"}:
+        if not works and not children:
+            raise ContractError(f"Task {work_id} not found")
+        task_kind = "WORK" if works else "SUBTASK"
+        work = (works or children)[0]
+    else:
+        task_kind, work = ("WORK", works[0]) if works else ("SUBTASK", children[0])
     action_history = [
         row for row in repo.read_actions()
         if row.get("WORK_ID") == work_id
@@ -812,7 +1084,7 @@ def _process_callback(
     ]
     can_reuse = (
         _state_already_applied(task_kind, work, action, arguments)
-        or action == "DETAIL"
+        or action in {"DETAIL", "SAFE_SYNC"}
         or (action in {"POSTPONE", "TRANSFER"} and not arguments)
     )
     if same_action and can_reuse:
@@ -853,16 +1125,31 @@ def _process_callback(
         }
     )
     old_status = work.get("STATUS", "")
-    if task_kind == "SUBTASK":
-        result = _apply_subtask_action(repo, work, action, arguments, timestamp)
-    elif action == "DETAIL":
-        result: dict[str, Any] = {
+    mutation_plan: ParentMutationPlan | None = None
+    if action in {"DETAIL", "SAFE_SYNC"}:
+        records = works + children
+        issues = consistency_check(
+            repo.read_work_items(), repo.read_subtasks(), today=today_vn(),
+        )
+        result = {
             "work_id": work_id,
-            "title": work.get("TITLE", ""),
-            "status": old_status,
-            "due_date": work.get("DUE_DATE", ""),
-            "next_action": work.get("NEXT_ACTION", ""),
+            "matches": [
+                {
+                    "kind": "WORK" if "WORK_ID" in row and "SUBTASK_ID" not in row else "SUBTASK",
+                    "title": row.get("TITLE", ""),
+                    "status": row.get("STATUS", ""),
+                    "due_date": row.get("DUE_DATE", ""),
+                }
+                for row in records
+            ],
+            "consistency_issues": [
+                {"code": issue.code, "detail": issue.detail}
+                for issue in issues if issue.work_id == work_id
+            ],
+            "status": "SAFE_SYNC_REVIEW" if action == "SAFE_SYNC" else old_status,
         }
+    elif task_kind == "SUBTASK":
+        result = _apply_subtask_action(repo, work, action, arguments, timestamp)
     elif action in {"POSTPONE", "TRANSFER"} and not arguments:
         result = {
             "status": "NEEDS_INPUT",
@@ -870,8 +1157,9 @@ def _process_callback(
         }
     elif action == "POSTPONE":
         due_date = str(arguments.get("due_date", "")).strip()
-        if parse_date(due_date) is None:
-            raise ValueError("POSTPONE requires a valid due_date")
+        parsed_due = parse_date(due_date)
+        if parsed_due is None or parsed_due <= today_vn():
+            raise ValueError("POSTPONE requires a future due_date")
         repo.update_work(
             int(work["_ROW_NUMBER"]),
             {"DUE_DATE": due_date, "UPDATED_BY": "HERMES", "UPDATED_AT": timestamp},
@@ -884,6 +1172,11 @@ def _process_callback(
         assignee = str(arguments.get("assignee", "")).strip()
         if not assignee:
             raise ValueError("TRANSFER requires assignee")
+        valid = repo.read_assignees()
+        exact = next((name for name in valid if name.casefold() == assignee.casefold()), None)
+        if exact is None:
+            raise ValueError("TRANSFER assignee is not an active TaskFlow user")
+        assignee = exact
         repo.update_work(
             int(work["_ROW_NUMBER"]),
             {"ASSIGNEE_NAME": assignee, "UPDATED_BY": "HERMES", "UPDATED_AT": timestamp},
@@ -901,44 +1194,68 @@ def _process_callback(
             dedupe_key=dedupe_key,
             timestamp=timestamp,
         )
+        mutation_plan = result.pop("_mutation_plan")
     else:
         result = _apply_simple_action(repo, work, action, timestamp)
 
-    completed = now_iso()
-    result_json = json.dumps(result, ensure_ascii=False, sort_keys=True)
-    log_id = f"HL-{hashlib.sha256(dedupe_key.encode()).hexdigest()[:20].upper()}"
-    if not any(row.get("LOG_ID") == log_id for row in repo.read_activity()):
-        repo.append_activity(
+    try:
+        completed = now_iso()
+        result_json = json.dumps(result, ensure_ascii=False, sort_keys=True)
+        log_id = f"HL-{hashlib.sha256(dedupe_key.encode()).hexdigest()[:20].upper()}"
+        if not any(row.get("LOG_ID") == log_id for row in repo.read_activity()):
+            repo.append_activity(
+                {
+                    "LOG_ID": log_id,
+                    "WORK_ID": work_id,
+                    "ACTION": action,
+                    "DETAILS_JSON": result_json,
+                    "ACTOR_EMAIL": (
+                        f"telegram:{user_id}"
+                        + (f" (@{username})" if username.strip() else "")
+                    ),
+                    "CREATED_AT": completed,
+                    "EVENT_TYPE": "HERMES_TASK_CALLBACK",
+                    "OLD_VALUE": old_status,
+                    "NEW_VALUE": str(result.get("status", "")),
+                    "NOTE": f"ACTION_ID={action_id}",
+                    "SOURCE": "HERMES_TELEGRAM",
+                }
+            )
+        activity = [row for row in repo.read_activity() if row.get("LOG_ID") == log_id]
+        if len(activity) != 1 or activity[0].get("DETAILS_JSON", "").strip() != result_json:
+            raise ContractError("Activity audit read-back mismatch")
+        repo.update_action(
+            int(queued["_ROW_NUMBER"]),
             {
-                "LOG_ID": log_id,
-                "WORK_ID": work_id,
-                "ACTION": action,
-                "DETAILS_JSON": result_json,
-                "ACTOR_EMAIL": TELEGRAM_OWNER_USERNAME,
-                "CREATED_AT": completed,
-                "EVENT_TYPE": "HERMES_TASK_CALLBACK",
-                "OLD_VALUE": old_status,
-                "NEW_VALUE": str(result.get("status", "")),
-                "NOTE": f"ACTION_ID={action_id}",
-                "SOURCE": "HERMES_TELEGRAM",
-            }
+                "STATUS": "COMPLETED" if result.get("status") != "NEEDS_INPUT" else "NEEDS_INPUT",
+                "COMPLETED_AT": completed if result.get("status") != "NEEDS_INPUT" else "",
+                "RESULT_JSON": result_json,
+                "ERROR_MESSAGE": "",
+                "UPDATED_AT": completed,
+            },
         )
-    repo.update_action(
-        int(queued["_ROW_NUMBER"]),
-        {
-            "STATUS": "COMPLETED" if result.get("status") != "NEEDS_INPUT" else "NEEDS_INPUT",
-            "COMPLETED_AT": completed if result.get("status") != "NEEDS_INPUT" else "",
-            "RESULT_JSON": result_json,
-            "ERROR_MESSAGE": "",
-            "UPDATED_AT": completed,
-        },
-    )
-    verified = [
-        row for row in repo.read_actions()
-        if row.get("ACTION_ID") == action_id
-    ]
-    if len(verified) != 1 or verified[0].get("RESULT_JSON", "").strip() != result_json:
-        raise ContractError("Action queue read-back mismatch")
+        verified = [
+            row for row in repo.read_actions()
+            if row.get("ACTION_ID") == action_id
+        ]
+        if (
+            len(verified) != 1
+            or verified[0].get("RESULT_JSON", "").strip() != result_json
+            or verified[0].get("STATUS") not in {"COMPLETED", "NEEDS_INPUT"}
+        ):
+            raise ContractError("Action queue read-back mismatch")
+    except Exception as exc:
+        if mutation_plan is not None:
+            try:
+                repo.compensate_mutation_plan(mutation_plan)
+            except Exception as rollback_exc:
+                raise NeedsReconciliationError(
+                    f"Post-mutation record failed and compensation is unverified: {rollback_exc}"
+                ) from exc
+            raise MutationRolledBackError(
+                f"Post-mutation record failed and parent plan was compensated: {exc}"
+            ) from exc
+        raise
     return {"idempotent": False, "action_id": action_id, "result": result}
 
 
@@ -946,6 +1263,7 @@ def process_callback(
     repo: TaskRepository,
     *,
     callback_id: str,
+    user_id: str,
     username: str,
     chat_id: str,
     thread_id: str,
@@ -958,6 +1276,7 @@ def process_callback(
             return _process_callback(
                 repo,
                 callback_id=callback_id,
+                user_id=user_id,
                 username=username,
                 chat_id=chat_id,
                 thread_id=thread_id,
@@ -974,54 +1293,16 @@ def process_callback(
                     repo.update_action(
                         int(row["_ROW_NUMBER"]),
                         {
-                            "STATUS": "FAILED",
+                            "STATUS": (
+                                "NEEDS_RECONCILIATION"
+                                if isinstance(exc, NeedsReconciliationError)
+                                else "FAILED"
+                            ),
                             "ERROR_MESSAGE": str(exc)[:500],
                             "UPDATED_AT": timestamp,
                         },
                     )
             raise
-
-
-def verify_webhook_secret(provided: str) -> None:
-    expected = os.getenv("HERMES_TASK_CALLBACK_SECRET", "").strip()
-    if not expected or not provided or not hmac.compare_digest(expected, provided):
-        raise PermissionError("Invalid Telegram webhook secret")
-
-
-def handle_telegram_update(
-    payload: Mapping[str, Any],
-    *,
-    secret_header: str,
-    repo: TaskRepository | None = None,
-    telegram: TelegramClient | None = None,
-) -> dict[str, Any]:
-    verify_webhook_secret(secret_header)
-    callback = payload.get("callback_query") or {}
-    if not callback:
-        return {"ok": True, "ignored": True}
-    user = callback.get("from") or {}
-    message = callback.get("message") or {}
-    chat = message.get("chat") or {}
-    result = process_callback(
-        repo or SheetsTaskRepository(),
-        callback_id=str(callback.get("id", "")),
-        username=str(user.get("username", "")),
-        chat_id=str(chat.get("id", "")),
-        thread_id=str(message.get("message_thread_id", "")),
-        data=str(callback.get("data", "")),
-    )
-    client = telegram or TelegramClient(
-        os.getenv("HERMES_TASK_BOT_TOKEN", "").strip()
-    )
-    callback_text = (
-        "Đã xử lý trước đó."
-        if result["idempotent"]
-        else "Cần bổ sung thông tin."
-        if result["result"].get("status") == "NEEDS_INPUT"
-        else "TaskFlow đã cập nhật và read-back khớp."
-    )
-    client.answer_callback(str(callback.get("id", "")), callback_text)
-    return {"ok": True, **result}
 
 
 def migration_plan(repo: TaskRepository) -> dict[str, Any]:
@@ -1069,7 +1350,7 @@ def main() -> int:
         raise RuntimeError("HERMES_TASK_CHAT_ID or --chat-id is required with --send")
     sent = send_digest(
         repo,
-        TelegramClient(os.getenv("HERMES_TASK_BOT_TOKEN", "").strip()),
+        TelegramClient(os.getenv("TELEGRAM_BOT_TOKEN", "").strip()),
         chat_id=args.chat_id,
         thread_id=args.thread_id,
     )
