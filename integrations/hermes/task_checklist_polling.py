@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from integrations.hermes.task_checklist import (
+    CONTINUE_MARKER,
     SheetsTaskRepository,
     TaskRepository,
     TERMINAL_SUBTASK_STATUSES,
@@ -340,7 +341,11 @@ async def handle_callback_query(
                         }
                         for row in open_children
                     ],
-                    "continue_subtasks": [],
+                    "continue_subtasks": [
+                        row.get("SUBTASK_ID", "").strip()
+                        for row in open_children
+                        if CONTINUE_MARKER in row.get("NOTE", "").upper()
+                    ],
                 }
                 session = sessions.create(
                     user_id=user_id, chat_id=chat_id, thread_id=thread_id,
@@ -365,7 +370,11 @@ async def handle_callback_query(
             session = sessions.create(
                 user_id=user_id, chat_id=chat_id, thread_id=thread_id,
                 work_id=work_id, action="n",
-                payload={"open_child_count": len(open_children)}, moment=moment,
+                payload={
+                    "open_child_count": len(open_children),
+                    "continue_subtasks": [],
+                },
+                moment=moment,
             )
             await _edit(
                 query,
@@ -506,7 +515,7 @@ async def handle_callback_query(
             raise ValueError("Thao tác chưa ở bước xác nhận")
         arguments = {
             key: value for key, value in session["payload"].items()
-            if key in {"due_date", "assignee"}
+            if key in {"due_date", "assignee", "continue_subtasks"}
         }
         result = process_callback(
             repository, callback_id=f"interaction:{token}", user_id=user_id,

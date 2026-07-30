@@ -228,10 +228,84 @@ class PollingInteractionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(2, len(self.repo.works))
         self.assertEqual("COMPLETED", self.repo.works[0]["STATUS"])
 
+    async def test_close_all_overrides_preselected_legacy_marker(self):
+        self.repo = FakeRepo(
+            [work("CV-PARENT", STATUS="IN_PROGRESS")],
+            [child(
+                "ST-MARKED", "CV-PARENT",
+                NOTE="CONTINUE_AFTER_PARENT=TRUE; legacy marker",
+            )],
+        )
+        start = FakeQuery("ht:c:CV-PARENT")
+        await polling.handle_callback_query(
+            start, None, repo=self.repo, store=self.store, moment=self.moment,
+        )
+        self.assertIn("☑️", start.edits[-1]["text"])
+        self.assertIn("TIẾP TỤC ĐỘC LẬP", start.edits[-1]["text"])
+        raw = (
+            start.edits[-1]["reply_markup"].to_dict()
+            if hasattr(start.edits[-1]["reply_markup"], "to_dict")
+            else start.edits[-1]["reply_markup"]
+        )
+        close_all = FakeQuery(raw["inline_keyboard"][0][0]["callback_data"])
+        await polling.handle_callback_query(
+            close_all, None, repo=self.repo, store=self.store, moment=self.moment,
+        )
+        self.assertIn("Xác nhận đóng toàn bộ", close_all.edits[-1]["text"])
+        raw_confirm = (
+            close_all.edits[-1]["reply_markup"].to_dict()
+            if hasattr(close_all.edits[-1]["reply_markup"], "to_dict")
+            else close_all.edits[-1]["reply_markup"]
+        )
+        confirm = FakeQuery(raw_confirm["inline_keyboard"][0][0]["callback_data"])
+        await polling.handle_callback_query(
+            confirm, None, repo=self.repo, store=self.store, moment=self.moment,
+        )
+        self.assertEqual(1, len(self.repo.works))
+        self.assertEqual("HOAN_THANH", self.repo.children[0]["STATUS"])
+        self.assertNotIn("DETACHED_TO=", self.repo.children[0]["NOTE"])
+
+    async def test_preselected_legacy_marker_is_kept_when_user_confirms(self):
+        self.repo = FakeRepo(
+            [work("CV-PARENT", STATUS="IN_PROGRESS")],
+            [child(
+                "ST-MARKED", "CV-PARENT",
+                NOTE="CONTINUE_AFTER_PARENT=TRUE; legacy marker",
+            )],
+        )
+        start = FakeQuery("ht:c:CV-PARENT")
+        await polling.handle_callback_query(
+            start, None, repo=self.repo, store=self.store, moment=self.moment,
+        )
+        raw = (
+            start.edits[-1]["reply_markup"].to_dict()
+            if hasattr(start.edits[-1]["reply_markup"], "to_dict")
+            else start.edits[-1]["reply_markup"]
+        )
+        select = FakeQuery(raw["inline_keyboard"][1][0]["callback_data"])
+        await polling.handle_callback_query(
+            select, None, repo=self.repo, store=self.store, moment=self.moment,
+        )
+        self.assertIn("☑️", select.edits[-1]["text"])
+        raw_select = (
+            select.edits[-1]["reply_markup"].to_dict()
+            if hasattr(select.edits[-1]["reply_markup"], "to_dict")
+            else select.edits[-1]["reply_markup"]
+        )
+        confirm = FakeQuery(raw_select["inline_keyboard"][-2][0]["callback_data"])
+        await polling.handle_callback_query(
+            confirm, None, repo=self.repo, store=self.store, moment=self.moment,
+        )
+        self.assertEqual(2, len(self.repo.works))
+        self.assertIn("DETACHED_TO=", self.repo.children[0]["NOTE"])
+
     async def test_not_done_requires_confirmation_before_any_write(self):
         self.repo = FakeRepo(
             [work("CV-PARENT")],
-            [child("ST-1", "CV-PARENT")],
+            [child(
+                "ST-1", "CV-PARENT",
+                NOTE="CONTINUE_AFTER_PARENT=TRUE; must still close",
+            )],
         )
         start = FakeQuery("ht:n:CV-PARENT")
         await polling.handle_callback_query(
@@ -249,6 +323,8 @@ class PollingInteractionTests(unittest.IsolatedAsyncioTestCase):
             confirm, None, repo=self.repo, store=self.store, moment=self.moment,
         )
         self.assertEqual("NOT_DONE", self.repo.works[0]["STATUS"])
+        self.assertEqual(1, len(self.repo.works))
+        self.assertNotIn("DETACHED_TO=", self.repo.children[0]["NOTE"])
 
     async def test_transfer_is_hidden_when_only_system_roster_exists(self):
         self.repo = FakeRepo([work("CV-1")], assignees=[])

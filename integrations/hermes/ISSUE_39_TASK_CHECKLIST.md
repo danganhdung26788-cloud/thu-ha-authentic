@@ -24,11 +24,15 @@ nếu `WORK_ID` không duy nhất.
 
 Khi hoàn thành cha có child mở, bot hiển thị toàn bộ child, trạng thái hiện tại
 và lựa chọn `Đóng toàn bộ` hoặc `Chọn việc tiếp tục`. Child được chọn tiếp tục
-chỉ được tách sau bước `Xác nhận`. `Không thực hiện` luôn yêu cầu xác nhận.
+chỉ được tách sau bước `Xác nhận`. Marker `CONTINUE_AFTER_PARENT=TRUE` cũ được
+preselect rõ ràng; `Đóng toàn bộ` đặt lựa chọn rỗng tường minh và luôn đóng thật
+toàn bộ. `Không thực hiện` luôn yêu cầu xác nhận.
 
 Mọi mutation, gồm START/WAIT/POSTPONE/TRANSFER/subtask/parent, đều có snapshot,
 read-back và compensation nếu audit/action thất bại. Không có idempotent success
 nếu action và audit chưa hoàn chỉnh.
+Work tách mới dùng Google Sheets append với `INSERT_ROWS`, không dùng số hàng
+suy đoán từ snapshot; read-back bắt buộc tìm đúng một `WORK_ID`.
 
 ## Biến môi trường
 
@@ -116,7 +120,9 @@ Smoke callback thật chỉ chạy sau khi code được duyệt:
    - duplicate `WORK_ID` không có nút mutation và callback giả mạo bị từ chối.
 5. Đóng cha qua checklist, chọn một child tiếp tục và một child đóng theo cha;
    xác nhận ID mới, child terminal, parent 100%, `COMPLETED_AT`,
-   `NEXT_ACTION` trống. Kiểm tra `Không thực hiện` không ghi gì trước xác nhận.
+   `NEXT_ACTION` trống. Kiểm tra marker cũ được preselect, `Đóng toàn bộ` không
+   tách child, và một hàng được thêm đồng thời không bị ghi đè. Kiểm tra
+   `Không thực hiện` không ghi gì trước xác nhận.
 6. Lưu bằng chứng đã che token/secret: callback ID, action ID, audit ID và
    snapshot read-back UAT.
 

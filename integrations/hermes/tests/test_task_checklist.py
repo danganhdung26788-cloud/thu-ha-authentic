@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import unittest
 from copy import deepcopy
 from datetime import date, datetime, timezone
@@ -8,6 +9,91 @@ from pathlib import Path
 from unittest.mock import patch
 
 from integrations.hermes import task_checklist as checklist
+
+
+class FakeRequest:
+    def __init__(self, action):
+        self.action = action
+
+    def execute(self):
+        return self.action()
+
+
+class ConcurrentSheetsService:
+    """Minimal Sheets values API that occupies the old next row before append."""
+
+    def __init__(self):
+        parent = ["" for _ in checklist.WORK_ITEMS_HEADERS]
+        parent[checklist.WORK_ITEMS_HEADERS.index("WORK_ID")] = "CV-PARENT"
+        parent[checklist.WORK_ITEMS_HEADERS.index("STATUS")] = "IN_PROGRESS"
+        self.values_by_sheet = {
+            "WORK_ITEMS": [list(checklist.WORK_ITEMS_HEADERS), parent],
+        }
+        self.append_calls = []
+        self.batch_ranges = []
+        self.insert_concurrent_on_append = True
+        self.fail_batch_once = False
+
+    def spreadsheets(self):
+        return self
+
+    def values(self):
+        return self
+
+    def get(self, *, range, **_kwargs):
+        sheet = range.split("!", 1)[0]
+        return FakeRequest(
+            lambda: {"values": deepcopy(self.values_by_sheet.get(sheet, []))}
+        )
+
+    def append(self, *, range, insertDataOption, body, **_kwargs):
+        sheet = range.split("!", 1)[0]
+        self.append_calls.append(insertDataOption)
+
+        def apply():
+            if self.insert_concurrent_on_append:
+                concurrent = ["" for _ in checklist.WORK_ITEMS_HEADERS]
+                concurrent[checklist.WORK_ITEMS_HEADERS.index("WORK_ID")] = (
+                    "CV-CONCURRENT"
+                )
+                concurrent[checklist.WORK_ITEMS_HEADERS.index("TITLE")] = (
+                    "Concurrent record"
+                )
+                concurrent[checklist.WORK_ITEMS_HEADERS.index("NOTE")] = (
+                    "DO_NOT_OVERWRITE"
+                )
+                self.values_by_sheet[sheet].append(concurrent)
+                self.insert_concurrent_on_append = False
+            self.values_by_sheet[sheet].append(list(body["values"][0]))
+            return {"updates": {"updatedRows": 1}}
+
+        return FakeRequest(apply)
+
+    @staticmethod
+    def _column_number(label):
+        number = 0
+        for character in label:
+            number = number * 26 + ord(character) - 64
+        return number
+
+    def batchUpdate(self, *, body, **_kwargs):
+        def apply():
+            if self.fail_batch_once:
+                self.fail_batch_once = False
+                raise RuntimeError("injected batch failure after append")
+            for item in body["data"]:
+                sheet, cell = item["range"].split("!", 1)
+                match = re.fullmatch(r"([A-Z]+)(\d+)", cell)
+                column = self._column_number(match.group(1))
+                row = int(match.group(2))
+                self.batch_ranges.append(item["range"])
+                target = self.values_by_sheet[sheet][row - 1]
+                while len(target) < column:
+                    target.append("")
+                target[column - 1] = item["values"][0][0]
+            return {"totalUpdatedCells": len(body["data"])}
+
+        return FakeRequest(apply)
 
 
 def work(work_id: str, **values: str) -> dict[str, str]:
@@ -55,7 +141,9 @@ class FakeRepo:
         self.fail_plan_after: int | None = None
         self.fail_compensation = False
         self.fail_activity_append = False
+        self.occupy_next_work_row_on_apply = False
         self.plan_snapshots = {}
+        self.applied_plans = []
 
     def read_work_items(self):
         return deepcopy(self.works)
@@ -115,24 +203,33 @@ class FakeRepo:
         return deepcopy(row)
 
     def apply_mutation_plan(self, plan):
+        if self.occupy_next_work_row_on_apply:
+            occupied_row = max(
+                (int(row["_ROW_NUMBER"]) for row in self.works), default=1,
+            ) + 1
+            self.works.append(work(
+                "CV-CONCURRENT",
+                _ROW_NUMBER=str(occupied_row),
+                TITLE="Concurrent record",
+                NOTE="DO_NOT_OVERWRITE",
+            ))
+            self.occupy_next_work_row_on_apply = False
         snapshots = (deepcopy(self.works), deepcopy(self.children))
         self.plan_snapshots[id(plan)] = snapshots
+        self.applied_plans.append(plan)
         applied = 0
         try:
             for mutation in plan.mutations:
                 if self.fail_plan_after is not None and applied >= self.fail_plan_after:
                     raise RuntimeError("injected partial batch failure")
                 if mutation.sheet == "WORK_ITEMS" and mutation.is_new:
-                    row = work(
-                        mutation.key_value, _ROW_NUMBER=str(mutation.row_number),
-                    )
-                    row.update(mutation.after)
-                    self.works.append(row)
+                    self.append_work(mutation.after)
                 elif mutation.sheet == "WORK_ITEMS":
                     self._update(self.works, mutation.row_number, mutation.after)
                 else:
                     self._update(self.children, mutation.row_number, mutation.after)
-                self.write_count += 1
+                if not mutation.is_new:
+                    self.write_count += 1
                 applied += 1
         except Exception as exc:
             try:
@@ -196,6 +293,79 @@ class TaskChecklistTests(unittest.TestCase):
             values, checklist.SUBTASK_HEADERS, "SUBTASKS",
         )
         self.assertEqual(["ST-1"], [row["SUBTASK_ID"] for row in rows])
+
+    def test_sheets_plan_appends_new_work_without_predicted_row_update(self):
+        service = ConcurrentSheetsService()
+        repo = checklist.SheetsTaskRepository("uat-sheet", service=service)
+        plan = checklist.ParentMutationPlan(
+            "CV-PARENT",
+            (
+                checklist.CellMutation(
+                    "WORK_ITEMS", 0, "WORK_ID", "CV-DETACHED", {},
+                    {
+                        "WORK_ID": "CV-DETACHED",
+                        "TITLE": "Detached work",
+                        "STATUS": "IN_PROGRESS",
+                    },
+                    True,
+                ),
+                checklist.CellMutation(
+                    "WORK_ITEMS", 2, "WORK_ID", "CV-PARENT",
+                    {"STATUS": "IN_PROGRESS"},
+                    {"STATUS": "COMPLETED"},
+                ),
+            ),
+            (),
+            ("CV-DETACHED",),
+        )
+        repo.apply_mutation_plan(plan)
+        records = repo.read_work_items()
+        concurrent = next(
+            row for row in records if row["WORK_ID"] == "CV-CONCURRENT"
+        )
+        detached = next(
+            row for row in records if row["WORK_ID"] == "CV-DETACHED"
+        )
+        self.assertEqual(["INSERT_ROWS"], service.append_calls)
+        self.assertEqual("Concurrent record", concurrent["TITLE"])
+        self.assertEqual("DO_NOT_OVERWRITE", concurrent["NOTE"])
+        self.assertEqual("3", concurrent["_ROW_NUMBER"])
+        self.assertEqual("4", detached["_ROW_NUMBER"])
+        self.assertFalse(any(item.endswith("3") for item in service.batch_ranges))
+
+    def test_sheets_append_failure_compensates_actual_appended_row_only(self):
+        service = ConcurrentSheetsService()
+        service.fail_batch_once = True
+        repo = checklist.SheetsTaskRepository("uat-sheet", service=service)
+        plan = checklist.ParentMutationPlan(
+            "CV-PARENT",
+            (
+                checklist.CellMutation(
+                    "WORK_ITEMS", 0, "WORK_ID", "CV-DETACHED", {},
+                    {"WORK_ID": "CV-DETACHED", "TITLE": "Detached work"},
+                    True,
+                ),
+                checklist.CellMutation(
+                    "WORK_ITEMS", 2, "WORK_ID", "CV-PARENT",
+                    {"STATUS": "IN_PROGRESS"},
+                    {"STATUS": "COMPLETED"},
+                ),
+            ),
+            (),
+            ("CV-DETACHED",),
+        )
+        with self.assertRaises(checklist.MutationRolledBackError):
+            repo.apply_mutation_plan(plan)
+        records = repo.read_work_items()
+        concurrent = next(
+            row for row in records if row["WORK_ID"] == "CV-CONCURRENT"
+        )
+        self.assertEqual("Concurrent record", concurrent["TITLE"])
+        self.assertEqual("DO_NOT_OVERWRITE", concurrent["NOTE"])
+        self.assertFalse(any(
+            row["WORK_ID"] == "CV-DETACHED" for row in records
+        ))
+        self.assertEqual("IN_PROGRESS", records[0]["STATUS"])
 
     def test_digest_only_has_six_task_groups(self):
         digest = checklist.build_digest([], [], today=date(2026, 7, 30))
@@ -386,6 +556,51 @@ class TaskChecklistTests(unittest.TestCase):
         self.assertTrue(detached[0].startswith("CV-CONT-"))
         self.assertEqual(detached[0], repo.works[1]["WORK_ID"])
         self.assertIn(f"DETACHED_TO={detached[0]}", repo.children[0]["NOTE"])
+
+    def test_explicit_close_all_overrides_legacy_continue_marker(self):
+        repo = FakeRepo(
+            [work("CV-PARENT", _ROW_NUMBER="2")],
+            [child(
+                "ST-MARKED", "CV-PARENT",
+                NOTE="CONTINUE_AFTER_PARENT=TRUE; legacy marker",
+                _ROW_NUMBER="2",
+            )],
+        )
+        result = checklist.process_callback(
+            repo, callback_id="cb-close-all", user_id="42",
+            username="danganhdung", chat_id="1", thread_id="",
+            data="ht:c:CV-PARENT", arguments={"continue_subtasks": []},
+        )
+        self.assertEqual([], result["result"]["detached_work_ids"])
+        self.assertEqual(["ST-MARKED"], result["result"]["closed_subtasks"])
+        self.assertEqual(1, len(repo.works))
+        self.assertNotIn("DETACHED_TO=", repo.children[0]["NOTE"])
+
+    def test_append_detach_does_not_overwrite_concurrently_occupied_row(self):
+        repo = FakeRepo(
+            [work("CV-PARENT", _ROW_NUMBER="2")],
+            [child("ST-KEEP", "CV-PARENT", _ROW_NUMBER="2")],
+        )
+        repo.occupy_next_work_row_on_apply = True
+        result = checklist.process_callback(
+            repo, callback_id="cb-concurrent", user_id="42",
+            username="danganhdung", chat_id="1", thread_id="",
+            data="ht:c:CV-PARENT",
+            arguments={"continue_subtasks": ["ST-KEEP"]},
+        )
+        concurrent = next(
+            row for row in repo.works if row["WORK_ID"] == "CV-CONCURRENT"
+        )
+        detached_id = result["result"]["detached_work_ids"][0]
+        detached = next(row for row in repo.works if row["WORK_ID"] == detached_id)
+        new_mutation = next(
+            item for item in repo.applied_plans[-1].mutations if item.is_new
+        )
+        self.assertEqual("Concurrent record", concurrent["TITLE"])
+        self.assertEqual("DO_NOT_OVERWRITE", concurrent["NOTE"])
+        self.assertEqual("3", concurrent["_ROW_NUMBER"])
+        self.assertEqual("4", detached["_ROW_NUMBER"])
+        self.assertEqual(0, new_mutation.row_number)
 
     def test_partial_child_failure_is_compensated_and_never_reports_success(self):
         parent = work("CV-1", STATUS="IN_PROGRESS", NEXT_ACTION="Tiếp tục")

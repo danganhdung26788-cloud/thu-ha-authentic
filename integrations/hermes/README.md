@@ -6,7 +6,8 @@ Gói này loại n8n khỏi đường vận hành. n8n chỉ còn là tài liệ
 
 - `telegram_dispatcher.py`: đọc `TELEGRAM_QUEUE`, gửi Telegram theo topic, chống gửi lặp bằng SQLite, cập nhật hàng đợi và append `RUN_LOG`.
 - `task_checklist.py`: bản tin chỉ gồm nhiệm vụ, consistency check cha–con và
-  mutation TaskFlow có read-back/bù trừ.
+  mutation TaskFlow có read-back/bù trừ; work tách mới luôn dùng append
+  `INSERT_ROWS`, không ghi vào số hàng dự đoán.
 - `task_checklist_polling.py`: state machine Lùi hạn/Chuyển việc/checklist child
   dùng ngay callback và message của một bot Hermes đang chạy `getUpdates`.
 - `configure_task_only_schedules.ps1`: dry-run/backup/cutover/rollback hai lịch

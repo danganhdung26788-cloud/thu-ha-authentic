@@ -354,13 +354,28 @@ class SheetsTaskRepository:
         for mutation in plan.mutations:
             if mutation.sheet not in cache:
                 cache[mutation.sheet] = self._read(mutation.sheet)
-            if mutation.is_new and not after:
-                if any(
-                    row.get(mutation.key_field, "").strip() == mutation.key_value
-                    for row in cache[mutation.sheet]
-                ):
+            if mutation.is_new:
+                matches = [
+                    row for row in cache[mutation.sheet]
+                    if row.get(mutation.key_field, "").strip() == mutation.key_value
+                ]
+                if not after and matches:
                     raise ContractError(
                         f"{mutation.sheet} key already exists: {mutation.key_value}"
+                    )
+                if not after:
+                    continue
+                if len(matches) != 1:
+                    raise ContractError(
+                        f"{mutation.sheet} append read-back expected one "
+                        f"{mutation.key_field}={mutation.key_value}; found {len(matches)}"
+                    )
+                if any(
+                    str(matches[0].get(key, "")).strip() != str(value).strip()
+                    for key, value in mutation.after.items()
+                ):
+                    raise ContractError(
+                        f"{mutation.sheet} appended record read-back mismatch"
                     )
                 continue
             matches = [
@@ -382,16 +397,27 @@ class SheetsTaskRepository:
 
     def apply_mutation_plan(self, plan: ParentMutationPlan) -> None:
         self._verify_plan(plan, after=False)
-        data = [
-            item
-            for mutation in plan.mutations
-            for item in self._mutation_data(mutation, mutation.after)
-        ]
+        appended = [item for item in plan.mutations if item.is_new]
+        existing = [item for item in plan.mutations if not item.is_new]
         try:
-            self.service.spreadsheets().values().batchUpdate(
-                spreadsheetId=self.spreadsheet_id,
-                body={"valueInputOption": "RAW", "data": data},
-            ).execute()
+            for mutation in appended:
+                if mutation.sheet != "WORK_ITEMS":
+                    raise ContractError(
+                        f"Append mutation is unsupported for {mutation.sheet}"
+                    )
+                # INSERT_ROWS lets Sheets choose and reserve the destination row.
+                # No row number from the earlier snapshot is ever used for new work.
+                self.append_work(mutation.after)
+            data = [
+                item
+                for mutation in existing
+                for item in self._mutation_data(mutation, mutation.after)
+            ]
+            if data:
+                self.service.spreadsheets().values().batchUpdate(
+                    spreadsheetId=self.spreadsheet_id,
+                    body={"valueInputOption": "RAW", "data": data},
+                ).execute()
             self._verify_plan(plan, after=True)
         except Exception as exc:
             try:
@@ -411,6 +437,38 @@ class SheetsTaskRepository:
         }
         reversible: list[tuple[CellMutation, Mapping[str, str]]] = []
         for mutation in reversed(plan.mutations):
+            if mutation.is_new:
+                matches = [
+                    row for row in cache[mutation.sheet]
+                    if row.get(mutation.key_field, "").strip() == mutation.key_value
+                ]
+                if not matches:
+                    continue
+                if len(matches) != 1:
+                    raise ContractError(
+                        "Refusing compensation because appended key is not unique"
+                    )
+                current = matches[0]
+                if any(
+                    str(current.get(key, "")).strip() != str(value).strip()
+                    for key, value in mutation.after.items()
+                ):
+                    raise ContractError(
+                        "Refusing compensation because appended work changed concurrently"
+                    )
+                actual = CellMutation(
+                    mutation.sheet,
+                    int(current["_ROW_NUMBER"]),
+                    mutation.key_field,
+                    mutation.key_value,
+                    mutation.before,
+                    mutation.after,
+                    True,
+                )
+                reversible.append(
+                    (actual, {key: "" for key in mutation.after})
+                )
+                continue
             current = next(
                 (
                     row for row in cache[mutation.sheet]
@@ -418,20 +476,6 @@ class SheetsTaskRepository:
                 ),
                 None,
             )
-            if mutation.is_new:
-                if current is None:
-                    continue
-                current_key = current.get(mutation.key_field, "").strip()
-                if not current_key:
-                    continue
-                if current_key != mutation.key_value:
-                    raise ContractError(
-                        "Refusing to clear a new row now owned by another record"
-                    )
-                reversible.append(
-                    (mutation, {key: "" for key in mutation.after})
-                )
-                continue
             if current is None:
                 raise ContractError("Existing mutation row disappeared")
             current_values = {
@@ -461,21 +505,18 @@ class SheetsTaskRepository:
                 spreadsheetId=self.spreadsheet_id,
                 body={"valueInputOption": "RAW", "data": data},
             ).execute()
-        # New rows are cleared; existing rows must exactly match their snapshot.
-        existing = ParentMutationPlan(
+        existing_plan = ParentMutationPlan(
             plan.parent_id,
             tuple(item for item in plan.mutations if not item.is_new),
             plan.closed_subtasks,
             plan.detached_work_ids,
         )
-        self._verify_plan(existing, after=False)
+        self._verify_plan(existing_plan, after=False)
         for mutation in (item for item in plan.mutations if item.is_new):
-            rows = self._read(mutation.sheet)
-            row = next(
-                (item for item in rows if int(item["_ROW_NUMBER"]) == mutation.row_number),
-                None,
-            )
-            if row and any(row.get(header, "").strip() for header in self.SHEETS[mutation.sheet]):
+            if any(
+                row.get(mutation.key_field, "").strip() == mutation.key_value
+                for row in self._read(mutation.sheet)
+            ):
                 raise ContractError("New row compensation read-back mismatch")
 
 
@@ -825,18 +866,21 @@ def _plan_parent_terminal(
         for value in arguments.get("continue_subtasks", [])
         if str(value).strip()
     }
+    has_explicit_selection = "continue_subtasks" in arguments
     mutations: list[CellMutation] = []
     detached: list[str] = []
     closed: list[str] = []
-    next_work_row = max((int(row["_ROW_NUMBER"]) for row in works), default=1) + 1
     child_terminal = "HOAN_THANH" if action == "COMPLETE" else "KHONG_THUC_HIEN"
     for child in children:
         if normalize_status(child.get("STATUS")) in TERMINAL_SUBTASK_STATUSES:
             continue
-        should_continue = (
-            child.get("SUBTASK_ID", "") in explicit_continue
-            or CONTINUE_MARKER in child.get("NOTE", "").upper()
-        )
+        if has_explicit_selection:
+            should_continue = child.get("SUBTASK_ID", "") in explicit_continue
+        else:
+            should_continue = (
+                action == "COMPLETE"
+                and CONTINUE_MARKER in child.get("NOTE", "").upper()
+            )
         if should_continue:
             new_id = _detached_work_id(child["SUBTASK_ID"], dedupe_key)
             if any(row.get("WORK_ID") == new_id for row in works):
@@ -866,9 +910,10 @@ def _plan_parent_terminal(
                 "WORK_KIND": "TASK",
             }
             mutations.append(CellMutation(
-                "WORK_ITEMS", next_work_row, "WORK_ID", new_id, {}, new_fields, True,
+                # Row zero is an explicit sentinel: apply uses Sheets append
+                # semantics and must never address a predicted row.
+                "WORK_ITEMS", 0, "WORK_ID", new_id, {}, new_fields, True,
             ))
-            next_work_row += 1
             child_fields = {
                 "STATUS": "HOAN_THANH",
                 "RESULT": f"Đã tách thành nhiệm vụ độc lập {new_id}",
