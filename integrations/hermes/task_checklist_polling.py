@@ -18,14 +18,16 @@ from typing import Any, Mapping
 from integrations.hermes.task_checklist import (
     SheetsTaskRepository,
     TaskRepository,
+    TERMINAL_SUBTASK_STATUSES,
     VN_TZ,
+    normalize_status,
     parse_date,
     process_callback,
     today_vn,
 )
 
 DEFAULT_STATE_PATH = "/opt/data/tha-telegram/task-checklist-interactions.db"
-STATE_PREFIXES = ("ht:", "htp:", "htt:", "htc:")
+STATE_PREFIXES = ("ht:", "htp:", "htt:", "htc:", "htk:")
 
 
 def _now(moment: datetime | None = None) -> datetime:
@@ -215,6 +217,35 @@ def _confirm_rows(token: str) -> list[list[tuple[str, str]]]:
     return [[("✅ Xác nhận", f"htc:{token}:y"), ("Hủy", f"htc:{token}:n")]]
 
 
+def _child_selection_text(session: Mapping[str, Any]) -> str:
+    selected = set(session["payload"].get("continue_subtasks", []))
+    lines = [f"Nhiệm vụ con của {session['work_id']}:"]
+    for item in session["payload"].get("children", []):
+        disposition = "TIẾP TỤC ĐỘC LẬP" if item["id"] in selected else "ĐÓNG THEO CHA"
+        lines.append(
+            f"{'☑️' if item['id'] in selected else '⬜'} "
+            f"{item['id']} — {item['title']} [{item['status'] or 'CHƯA CHỌN'}] "
+            f"→ {disposition}"
+        )
+    return "\n".join(lines)[:3900]
+
+
+def _child_selection_rows(session: Mapping[str, Any]) -> list[list[tuple[str, str]]]:
+    selected = set(session["payload"].get("continue_subtasks", []))
+    rows = [
+        [(
+            ("☑️ " if item["id"] in selected else "⬜ ") + item["id"],
+            f"htk:{session['token']}:i{index}",
+        )]
+        for index, item in enumerate(session["payload"].get("children", []))
+    ]
+    rows.extend([
+        [("✅ Xác nhận", f"htk:{session['token']}:y")],
+        [("Hủy", f"htk:{session['token']}:n")],
+    ])
+    return rows
+
+
 async def handle_callback_query(
     query: Any,
     context: Any,
@@ -265,6 +296,14 @@ async def handle_callback_query(
             return True
         if code == "t":
             assignees = repository.read_assignees()
+            if not assignees:
+                await _edit(
+                    query,
+                    "Chưa có danh sách người phụ trách sử dụng được; "
+                    "không thể Chuyển việc.",
+                    [],
+                )
+                return True
             session = sessions.create(
                 user_id=user_id, chat_id=chat_id, thread_id=thread_id,
                 work_id=work_id, action="t", payload={"assignees": assignees},
@@ -280,6 +319,61 @@ async def handle_callback_query(
                 [("Hủy", f"htt:{token}:x")],
             ])
             await _edit(query, f"Chọn người phụ trách hợp lệ cho {work_id}:", rows)
+            return True
+        if code == "c":
+            parents = [
+                row for row in repository.read_work_items()
+                if row.get("WORK_ID", "").strip() == work_id
+            ]
+            open_children = [
+                row for row in repository.read_subtasks()
+                if row.get("WORK_ID", "").strip() == work_id
+                and normalize_status(row.get("STATUS")) not in TERMINAL_SUBTASK_STATUSES
+            ]
+            if len(parents) == 1 and open_children:
+                payload = {
+                    "children": [
+                        {
+                            "id": row.get("SUBTASK_ID", "").strip(),
+                            "title": row.get("TITLE", "").strip(),
+                            "status": row.get("STATUS", "").strip(),
+                        }
+                        for row in open_children
+                    ],
+                    "continue_subtasks": [],
+                }
+                session = sessions.create(
+                    user_id=user_id, chat_id=chat_id, thread_id=thread_id,
+                    work_id=work_id, action="c", payload=payload, moment=moment,
+                )
+                await _edit(
+                    query,
+                    _child_selection_text(session),
+                    [
+                        [("Đóng toàn bộ", f"htk:{session['token']}:a")],
+                        [("Chọn việc tiếp tục", f"htk:{session['token']}:s")],
+                        [("Hủy", f"htk:{session['token']}:n")],
+                    ],
+                )
+                return True
+        if code == "n":
+            open_children = [
+                row for row in repository.read_subtasks()
+                if row.get("WORK_ID", "").strip() == work_id
+                and normalize_status(row.get("STATUS")) not in TERMINAL_SUBTASK_STATUSES
+            ]
+            session = sessions.create(
+                user_id=user_id, chat_id=chat_id, thread_id=thread_id,
+                work_id=work_id, action="n",
+                payload={"open_child_count": len(open_children)}, moment=moment,
+            )
+            await _edit(
+                query,
+                f"Xác nhận Không thực hiện {work_id}? "
+                f"{len(open_children)} nhiệm vụ con đang mở sẽ đóng theo cha.",
+                _confirm_rows(session["token"]),
+            )
+            sessions.update(session["token"], stage="CONFIRM", moment=moment)
             return True
         result = process_callback(
             repository, callback_id=str(query.id), user_id=user_id,
@@ -350,6 +444,61 @@ async def handle_callback_query(
             _confirm_rows(token),
         )
         return True
+
+    if prefix == "htk":
+        payload = dict(session["payload"])
+        if choice == "a":
+            payload["continue_subtasks"] = []
+            session = sessions.update(
+                token, stage="CONFIRM", payload=payload, moment=moment,
+            )
+            await _edit(
+                query,
+                _child_selection_text(session) + "\n\nXác nhận đóng toàn bộ?",
+                [[("✅ Xác nhận", f"htk:{token}:y"), ("Hủy", f"htk:{token}:n")]],
+            )
+            return True
+        if choice == "s":
+            session = sessions.update(
+                token, stage="SELECT_CHILDREN", payload=payload, moment=moment,
+            )
+            await _edit(
+                query, _child_selection_text(session), _child_selection_rows(session),
+            )
+            return True
+        if choice.startswith("i") and choice[1:].isdigit():
+            children = payload.get("children", [])
+            index = int(choice[1:])
+            if index >= len(children):
+                raise ValueError("Lựa chọn nhiệm vụ con không hợp lệ")
+            selected = set(payload.get("continue_subtasks", []))
+            child_id = children[index]["id"]
+            if child_id in selected:
+                selected.remove(child_id)
+            else:
+                selected.add(child_id)
+            payload["continue_subtasks"] = sorted(selected)
+            session = sessions.update(
+                token, stage="SELECT_CHILDREN", payload=payload, moment=moment,
+            )
+            await _edit(
+                query, _child_selection_text(session), _child_selection_rows(session),
+            )
+            return True
+        if choice == "y":
+            if session["stage"] not in {"CONFIRM", "SELECT_CHILDREN"}:
+                raise ValueError("Checklist nhiệm vụ con chưa sẵn sàng xác nhận")
+            result = process_callback(
+                repository, callback_id=f"interaction:{token}", user_id=user_id,
+                username=username, chat_id=chat_id, thread_id=thread_id,
+                data=f"ht:c:{session['work_id']}",
+                arguments={
+                    "continue_subtasks": payload.get("continue_subtasks", []),
+                },
+            )
+            sessions.update(token, stage="COMPLETE", result=result, moment=moment)
+            await _edit(query, "TaskFlow đã cập nhật và read-back khớp.", [])
+            return True
 
     if prefix == "htc" and choice == "y":
         session = sessions.get(token, moment=moment)

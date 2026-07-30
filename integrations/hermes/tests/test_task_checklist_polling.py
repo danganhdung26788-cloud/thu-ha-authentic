@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from integrations.hermes import task_checklist_polling as polling
-from integrations.hermes.tests.test_task_checklist import FakeRepo, work
+from integrations.hermes.tests.test_task_checklist import FakeRepo, child, work
 
 
 class FakeQuery:
@@ -178,6 +178,85 @@ class PollingInteractionTests(unittest.IsolatedAsyncioTestCase):
             moment=datetime(2026, 7, 30, 3, 2, tzinfo=timezone.utc),
         )
         self.assertIn("hết hạn", late.edits[-1]["text"])
+        self.assertEqual(0, self.repo.write_count)
+
+    async def test_parent_checklist_detaches_selected_child_and_closes_other(self):
+        self.repo = FakeRepo(
+            [work("CV-PARENT", STATUS="IN_PROGRESS")],
+            [
+                child("ST-KEEP", "CV-PARENT", _ROW_NUMBER="2"),
+                child("ST-CLOSE", "CV-PARENT", _ROW_NUMBER="3"),
+            ],
+        )
+        start = FakeQuery("ht:c:CV-PARENT")
+        await polling.handle_callback_query(
+            start, None, repo=self.repo, store=self.store, moment=self.moment,
+        )
+        self.assertIn("ST-KEEP", start.edits[-1]["text"])
+        raw = (
+            start.edits[-1]["reply_markup"].to_dict()
+            if hasattr(start.edits[-1]["reply_markup"], "to_dict")
+            else start.edits[-1]["reply_markup"]
+        )
+        choose = FakeQuery(raw["inline_keyboard"][1][0]["callback_data"])
+        await polling.handle_callback_query(
+            choose, None, repo=self.repo, store=self.store, moment=self.moment,
+        )
+        raw_choose = (
+            choose.edits[-1]["reply_markup"].to_dict()
+            if hasattr(choose.edits[-1]["reply_markup"], "to_dict")
+            else choose.edits[-1]["reply_markup"]
+        )
+        toggle = FakeQuery(raw_choose["inline_keyboard"][0][0]["callback_data"])
+        await polling.handle_callback_query(
+            toggle, None, repo=self.repo, store=self.store, moment=self.moment,
+        )
+        raw_toggle = (
+            toggle.edits[-1]["reply_markup"].to_dict()
+            if hasattr(toggle.edits[-1]["reply_markup"], "to_dict")
+            else toggle.edits[-1]["reply_markup"]
+        )
+        confirm = FakeQuery(raw_toggle["inline_keyboard"][-2][0]["callback_data"])
+        await polling.handle_callback_query(
+            confirm, None, repo=self.repo, store=self.store, moment=self.moment,
+        )
+        keep = next(row for row in self.repo.children if row["SUBTASK_ID"] == "ST-KEEP")
+        close = next(row for row in self.repo.children if row["SUBTASK_ID"] == "ST-CLOSE")
+        self.assertIn("DETACHED_TO=", keep["NOTE"])
+        self.assertEqual("HOAN_THANH", keep["STATUS"])
+        self.assertEqual("HOAN_THANH", close["STATUS"])
+        self.assertEqual(2, len(self.repo.works))
+        self.assertEqual("COMPLETED", self.repo.works[0]["STATUS"])
+
+    async def test_not_done_requires_confirmation_before_any_write(self):
+        self.repo = FakeRepo(
+            [work("CV-PARENT")],
+            [child("ST-1", "CV-PARENT")],
+        )
+        start = FakeQuery("ht:n:CV-PARENT")
+        await polling.handle_callback_query(
+            start, None, repo=self.repo, store=self.store, moment=self.moment,
+        )
+        self.assertEqual(0, self.repo.write_count)
+        self.assertIn("Xác nhận", start.edits[-1]["text"])
+        raw = (
+            start.edits[-1]["reply_markup"].to_dict()
+            if hasattr(start.edits[-1]["reply_markup"], "to_dict")
+            else start.edits[-1]["reply_markup"]
+        )
+        confirm = FakeQuery(raw["inline_keyboard"][0][0]["callback_data"])
+        await polling.handle_callback_query(
+            confirm, None, repo=self.repo, store=self.store, moment=self.moment,
+        )
+        self.assertEqual("NOT_DONE", self.repo.works[0]["STATUS"])
+
+    async def test_transfer_is_hidden_when_only_system_roster_exists(self):
+        self.repo = FakeRepo([work("CV-1")], assignees=[])
+        start = FakeQuery("ht:t:CV-1")
+        await polling.handle_callback_query(
+            start, None, repo=self.repo, store=self.store, moment=self.moment,
+        )
+        self.assertIn("Chưa có danh sách", start.edits[-1]["text"])
         self.assertEqual(0, self.repo.write_count)
 
 

@@ -1,7 +1,9 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$Container = "hermes-gateway",
-    [switch]$Restart
+    [switch]$Restart,
+    [string]$DataRoot = "D:\HermesAgent\data",
+    [string]$ScheduleBackupPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,5 +20,10 @@ if ($PSCmdlet.ShouldProcess($Container, "Restore backed-up polling adapter")) {
 }
 if ($Restart -and $PSCmdlet.ShouldProcess($Container, "Restart Hermes gateway")) {
     docker restart $Container | Out-Null
+}
+if ($ScheduleBackupPath) {
+    & (Join-Path $PSScriptRoot "configure_task_only_schedules.ps1") `
+        -Mode Rollback -Container $Container -DataRoot $DataRoot `
+        -BackupPath $ScheduleBackupPath
 }
 Write-Output "ISSUE39_POLLING_ROLLBACK_READY=TRUE"

@@ -49,9 +49,12 @@ class FakeRepo:
         self.actions: list[dict[str, str]] = []
         self.activities: list[dict[str, str]] = []
         self.write_count = 0
-        self.assignees = list(assignees or ["Nguyễn Văn A", "Trần Thị B"])
+        self.assignees = list(
+            ["Nguyễn Văn A", "Trần Thị B"] if assignees is None else assignees
+        )
         self.fail_plan_after: int | None = None
         self.fail_compensation = False
+        self.fail_activity_append = False
         self.plan_snapshots = {}
 
     def read_work_items(self):
@@ -103,6 +106,8 @@ class FakeRepo:
 
     def append_activity(self, fields):
         self.write_count += 1
+        if self.fail_activity_append:
+            raise RuntimeError("injected activity append failure")
         row = {key: "" for key in checklist.ACTIVITY_HEADERS}
         row.update(fields)
         row["_ROW_NUMBER"] = str(len(self.activities) + 2)
@@ -223,6 +228,18 @@ class TaskChecklistTests(unittest.TestCase):
             {"d", "s"},
             {button["callback_data"].split(":")[1] for row in rows for button in row},
         )
+
+    def test_transfer_button_is_hidden_without_usable_roster(self):
+        rows = checklist.callback_keyboard(
+            "CV-1", allow_transfer=False,
+        )["inline_keyboard"]
+        codes = {
+            button["callback_data"].split(":")[1]
+            for row in rows for button in row
+        }
+        self.assertNotIn("t", codes)
+        self.assertEqual({"c", "w", "h", "p", "n", "d"}, codes)
+        self.assertFalse(checklist.usable_assignee("Quản trị hệ thống"))
 
     def test_issue_39_consistency_fixture_is_detected_and_not_overdue(self):
         works = [
@@ -451,19 +468,76 @@ class TaskChecklistTests(unittest.TestCase):
             self.assertEqual("NEEDS_INPUT", result["result"]["status"])
             self.assertEqual("IN_PROGRESS", repo.works[0]["STATUS"])
 
-    def test_readback_mismatch_prevents_success(self):
-        class BrokenRepo(FakeRepo):
-            def update_work(self, row_number, fields):
-                self.write_count += 1
-
-        repo = BrokenRepo([work("CV-1")])
-        with self.assertRaises(checklist.ContractError):
+    def test_start_rolls_back_when_audit_fails(self):
+        repo = FakeRepo([work("CV-1", STATUS="NEW")])
+        repo.fail_activity_append = True
+        with self.assertRaises(checklist.MutationRolledBackError):
             checklist.process_callback(
                 repo, callback_id="cb", user_id="42", username="danganhdung", chat_id="1",
-                thread_id="", data="ht:h:CV-1",
+                thread_id="", data="ht:w:CV-1",
             )
+        self.assertEqual("NEW", repo.works[0]["STATUS"])
         self.assertFalse(repo.activities)
         self.assertEqual("FAILED", repo.actions[0]["STATUS"])
+
+    def test_postpone_rolls_back_when_audit_fails(self):
+        repo = FakeRepo([work("CV-1", DUE_DATE="31/07/2026")])
+        repo.fail_activity_append = True
+        with self.assertRaises(checklist.MutationRolledBackError):
+            checklist.process_callback(
+                repo, callback_id="cb-postpone", user_id="42",
+                username="danganhdung", chat_id="1", thread_id="",
+                data="ht:p:CV-1", arguments={"due_date": "05/08/2026"},
+            )
+        self.assertEqual("31/07/2026", repo.works[0]["DUE_DATE"])
+        self.assertEqual("FAILED", repo.actions[0]["STATUS"])
+
+    def test_subtask_rolls_back_when_audit_fails(self):
+        repo = FakeRepo(
+            [work("CV-1")],
+            [child("ST-1", "CV-1", STATUS="DANG_THUC_HIEN")],
+        )
+        repo.fail_activity_append = True
+        with self.assertRaises(checklist.MutationRolledBackError):
+            checklist.process_callback(
+                repo, callback_id="cb-subtask-audit", user_id="42",
+                username="danganhdung", chat_id="1", thread_id="",
+                data="ht:c:ST-1",
+            )
+        self.assertEqual("DANG_THUC_HIEN", repo.children[0]["STATUS"])
+        self.assertEqual("FAILED", repo.actions[0]["STATUS"])
+
+    def test_simple_mutation_compensation_failure_requires_reconciliation(self):
+        repo = FakeRepo([work("CV-1", STATUS="NEW")])
+        repo.fail_activity_append = True
+        repo.fail_compensation = True
+        with self.assertRaises(checklist.NeedsReconciliationError):
+            checklist.process_callback(
+                repo, callback_id="cb-simple-reconcile", user_id="42",
+                username="danganhdung", chat_id="1", thread_id="",
+                data="ht:w:CV-1",
+            )
+        self.assertEqual("IN_PROGRESS", repo.works[0]["STATUS"])
+        self.assertEqual("NEEDS_RECONCILIATION", repo.actions[0]["STATUS"])
+
+    def test_failed_action_with_applied_state_never_returns_idempotent_success(self):
+        repo = FakeRepo([work("CV-1", STATUS="NEW")])
+        repo.fail_activity_append = True
+        repo.fail_compensation = True
+        with self.assertRaises(checklist.NeedsReconciliationError):
+            checklist.process_callback(
+                repo, callback_id="cb-first", user_id="42",
+                username="danganhdung", chat_id="1", thread_id="",
+                data="ht:w:CV-1",
+            )
+        repo.fail_activity_append = False
+        repo.fail_compensation = False
+        with self.assertRaises(checklist.NeedsReconciliationError):
+            checklist.process_callback(
+                repo, callback_id="cb-retry", user_id="42",
+                username="danganhdung", chat_id="1", thread_id="",
+                data="ht:w:CV-1",
+            )
 
     def test_send_digest_emits_task_cards_with_callbacks(self):
         repo = FakeRepo(

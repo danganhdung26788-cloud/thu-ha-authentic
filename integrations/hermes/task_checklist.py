@@ -134,6 +134,16 @@ def parse_date(value: Any) -> date | None:
     return None
 
 
+def usable_assignee(name: Any) -> bool:
+    display = str(name or "").strip().casefold()
+    if display in {"quản trị hệ thống", "system administrator", "admin", "administrator"}:
+        return False
+    normalized = normalize_status(name)
+    return bool(normalized) and normalized not in {
+        "QUAN_TRI_HE_THONG", "SYSTEM_ADMINISTRATOR", "ADMIN", "ADMINISTRATOR",
+    }
+
+
 def rows_as_dicts(
     values: Sequence[Sequence[Any]],
     expected: Sequence[str],
@@ -302,7 +312,7 @@ class SheetsTaskRepository:
         return sorted({
             row.get("FULL_NAME", "").strip()
             for row in self._read("USERS")
-            if row.get("FULL_NAME", "").strip()
+            if usable_assignee(row.get("FULL_NAME"))
             and normalize_status(row.get("ACTIVE")) in {"TRUE", "YES", "1", "ACTIVE"}
         })
 
@@ -640,7 +650,7 @@ def build_digest(
 
 
 def callback_keyboard(
-    work_id: str, *, sync_required: bool = False,
+    work_id: str, *, sync_required: bool = False, allow_transfer: bool = True,
 ) -> dict[str, list[list[dict[str, str]]]]:
     if sync_required:
         return {
@@ -650,10 +660,14 @@ def callback_keyboard(
             ]]
         }
     rows: list[list[dict[str, str]]] = []
-    for index in range(0, len(ACTION_BUTTONS), 2):
+    buttons = [
+        item for item in ACTION_BUTTONS
+        if allow_transfer or item[1] != "t"
+    ]
+    for index in range(0, len(buttons), 2):
         row = [
             {"text": label, "callback_data": f"ht:{code}:{work_id}"}
-            for label, code in ACTION_BUTTONS[index:index + 2]
+            for label, code in buttons[index:index + 2]
         ]
         rows.append(row)
     if any(len(button["callback_data"].encode("utf-8")) > 64 for row in rows for button in row):
@@ -694,12 +708,16 @@ class TelegramClient:
 
     def send_task(
         self, *, chat_id: str, thread_id: str, text: str, work_id: str,
-        sync_required: bool = False,
+        sync_required: bool = False, allow_transfer: bool = True,
     ) -> str:
         payload: dict[str, Any] = {
             "chat_id": chat_id,
             "text": text,
-            "reply_markup": callback_keyboard(work_id, sync_required=sync_required),
+            "reply_markup": callback_keyboard(
+                work_id,
+                sync_required=sync_required,
+                allow_transfer=allow_transfer,
+            ),
             "disable_web_page_preview": True,
         }
         if thread_id:
@@ -726,6 +744,7 @@ def send_digest(
     today: date | None = None,
 ) -> int:
     digest = build_digest(repo.read_work_items(), repo.read_subtasks(), today=today)
+    allow_transfer = bool(repo.read_assignees())
     sent = 0
     seen: set[str] = set()
     for group, records in digest.groups.items():
@@ -739,6 +758,7 @@ def send_digest(
                 text=format_task(work, group),
                 work_id=work_id,
                 sync_required=group == "CẦN ĐỒNG BỘ DỮ LIỆU",
+                allow_transfer=allow_transfer,
             )
             seen.add(work_id)
             sent += 1
@@ -929,11 +949,16 @@ def _apply_simple_action(
         "WAIT": {"STATUS": "WAITING"},
     }
     fields = mapping[action] | {"UPDATED_BY": "HERMES", "UPDATED_AT": timestamp}
-    repo.update_work(int(work["_ROW_NUMBER"]), fields)
-    read_back = _find_work(repo, work["WORK_ID"])
-    if any(read_back.get(key, "").strip() != value for key, value in fields.items()):
-        raise ContractError("TaskFlow read-back mismatch")
-    return {"status": fields["STATUS"]}
+    plan = ParentMutationPlan(
+        work["WORK_ID"],
+        (CellMutation(
+            "WORK_ITEMS", int(work["_ROW_NUMBER"]), "WORK_ID", work["WORK_ID"],
+            {key: work.get(key, "") for key in fields}, fields,
+        ),),
+        (), (),
+    )
+    repo.apply_mutation_plan(plan)
+    return {"status": fields["STATUS"], "_mutation_plan": plan}
 
 
 def _apply_subtask_action(
@@ -984,21 +1009,40 @@ def _apply_subtask_action(
     else:
         raise ValueError(f"Unsupported subtask action: {action}")
     fields["UPDATED_AT"] = timestamp
-    repo.update_subtask(int(child["_ROW_NUMBER"]), fields)
-    verified = [
-        row for row in repo.read_subtasks()
-        if row.get("SUBTASK_ID") == child.get("SUBTASK_ID")
-    ]
-    if len(verified) != 1 or any(
-        verified[0].get(key, "").strip() != value for key, value in fields.items()
-    ):
-        raise ContractError("Subtask read-back mismatch")
-    result = {"status": verified[0].get("STATUS", "")}
+    plan = ParentMutationPlan(
+        child["WORK_ID"],
+        (CellMutation(
+            "SUBTASKS", int(child["_ROW_NUMBER"]), "SUBTASK_ID",
+            child["SUBTASK_ID"],
+            {key: child.get(key, "") for key in fields}, fields,
+        ),),
+        (), (),
+    )
+    repo.apply_mutation_plan(plan)
+    result = {"status": fields.get("STATUS", child.get("STATUS", ""))}
     if "DUE_DATE" in fields:
         result["due_date"] = fields["DUE_DATE"]
     if "ASSIGNEE" in fields:
         result["assignee"] = fields["ASSIGNEE"]
+    result["_mutation_plan"] = plan
     return result
+
+
+def _action_has_complete_evidence(
+    repo: TaskRepository,
+    action_row: Mapping[str, str],
+) -> bool:
+    if normalize_status(action_row.get("STATUS")) != "COMPLETED":
+        return False
+    result_json = action_row.get("RESULT_JSON", "").strip()
+    action_id = action_row.get("ACTION_ID", "").strip()
+    if not result_json or not action_id:
+        return False
+    return any(
+        row.get("NOTE", "").strip() == f"ACTION_ID={action_id}"
+        and row.get("DETAILS_JSON", "").strip() == result_json
+        for row in repo.read_activity()
+    )
 
 
 def _state_already_applied(
@@ -1082,24 +1126,29 @@ def _process_callback(
         if row.get("ACTION_TYPE") == action
         and row.get("ARGUMENTS_JSON", "").strip() == canonical_args
     ]
+    complete_same_action = [
+        row for row in same_action if _action_has_complete_evidence(repo, row)
+    ]
     can_reuse = (
         _state_already_applied(task_kind, work, action, arguments)
         or action in {"DETAIL", "SAFE_SYNC"}
         or (action in {"POSTPONE", "TRANSFER"} and not arguments)
     )
-    if same_action and can_reuse:
-        result = same_action[-1].get("RESULT_JSON", "").strip()
+    if complete_same_action and can_reuse:
+        result = complete_same_action[-1].get("RESULT_JSON", "").strip()
         return {
             "idempotent": True,
-            "action_id": same_action[-1].get("ACTION_ID", ""),
+            "action_id": complete_same_action[-1].get("ACTION_ID", ""),
             "result": json.loads(result) if result else {},
         }
-    if _state_already_applied(task_kind, work, action, arguments):
-        return {
-            "idempotent": True,
-            "action_id": "",
-            "result": {"status": work.get("STATUS", "")},
-        }
+    already_applied = _state_already_applied(task_kind, work, action, arguments)
+    if already_applied and any(
+        normalize_status(row.get("STATUS")) in {"FAILED", "NEEDS_RECONCILIATION"}
+        for row in same_action
+    ):
+        raise NeedsReconciliationError(
+            "Task state exists without complete action/audit evidence"
+        )
     history_token = action_history[-1].get("ACTION_ID", "") if action_history else ""
     dedupe_key = _dedupe_key(work_id, action, arguments, history_token)
 
@@ -1126,7 +1175,9 @@ def _process_callback(
     )
     old_status = work.get("STATUS", "")
     mutation_plan: ParentMutationPlan | None = None
-    if action in {"DETAIL", "SAFE_SYNC"}:
+    if already_applied:
+        result = {"status": work.get("STATUS", ""), "noop": True}
+    elif action in {"DETAIL", "SAFE_SYNC"}:
         records = works + children
         issues = consistency_check(
             repo.read_work_items(), repo.read_subtasks(), today=today_vn(),
@@ -1160,14 +1211,19 @@ def _process_callback(
         parsed_due = parse_date(due_date)
         if parsed_due is None or parsed_due <= today_vn():
             raise ValueError("POSTPONE requires a future due_date")
-        repo.update_work(
-            int(work["_ROW_NUMBER"]),
-            {"DUE_DATE": due_date, "UPDATED_BY": "HERMES", "UPDATED_AT": timestamp},
+        fields = {
+            "DUE_DATE": due_date, "UPDATED_BY": "HERMES", "UPDATED_AT": timestamp,
+        }
+        mutation_plan = ParentMutationPlan(
+            work_id,
+            (CellMutation(
+                "WORK_ITEMS", int(work["_ROW_NUMBER"]), "WORK_ID", work_id,
+                {key: work.get(key, "") for key in fields}, fields,
+            ),),
+            (), (),
         )
-        read_back = _find_work(repo, work_id)
-        if read_back.get("DUE_DATE", "").strip() != due_date:
-            raise ContractError("Due-date read-back mismatch")
-        result = {"status": read_back.get("STATUS", ""), "due_date": due_date}
+        repo.apply_mutation_plan(mutation_plan)
+        result = {"status": work.get("STATUS", ""), "due_date": due_date}
     elif action == "TRANSFER":
         assignee = str(arguments.get("assignee", "")).strip()
         if not assignee:
@@ -1177,14 +1233,21 @@ def _process_callback(
         if exact is None:
             raise ValueError("TRANSFER assignee is not an active TaskFlow user")
         assignee = exact
-        repo.update_work(
-            int(work["_ROW_NUMBER"]),
-            {"ASSIGNEE_NAME": assignee, "UPDATED_BY": "HERMES", "UPDATED_AT": timestamp},
+        fields = {
+            "ASSIGNEE_NAME": assignee,
+            "UPDATED_BY": "HERMES",
+            "UPDATED_AT": timestamp,
+        }
+        mutation_plan = ParentMutationPlan(
+            work_id,
+            (CellMutation(
+                "WORK_ITEMS", int(work["_ROW_NUMBER"]), "WORK_ID", work_id,
+                {key: work.get(key, "") for key in fields}, fields,
+            ),),
+            (), (),
         )
-        read_back = _find_work(repo, work_id)
-        if read_back.get("ASSIGNEE_NAME", "").strip() != assignee:
-            raise ContractError("Assignee read-back mismatch")
-        result = {"status": read_back.get("STATUS", ""), "assignee": assignee}
+        repo.apply_mutation_plan(mutation_plan)
+        result = {"status": work.get("STATUS", ""), "assignee": assignee}
     elif action in {"COMPLETE", "NOT_DONE"}:
         result = _apply_parent_terminal(
             repo,
@@ -1197,7 +1260,12 @@ def _process_callback(
         mutation_plan = result.pop("_mutation_plan")
     else:
         result = _apply_simple_action(repo, work, action, timestamp)
+        mutation_plan = result.pop("_mutation_plan")
 
+    if task_kind == "SUBTASK" and "_mutation_plan" in result:
+        mutation_plan = result.pop("_mutation_plan")
+
+    audit_side_effect = False
     try:
         completed = now_iso()
         result_json = json.dumps(result, ensure_ascii=False, sort_keys=True)
@@ -1221,6 +1289,9 @@ def _process_callback(
                     "SOURCE": "HERMES_TELEGRAM",
                 }
             )
+            audit_side_effect = True
+        else:
+            audit_side_effect = True
         activity = [row for row in repo.read_activity() if row.get("LOG_ID") == log_id]
         if len(activity) != 1 or activity[0].get("DETAILS_JSON", "").strip() != result_json:
             raise ContractError("Activity audit read-back mismatch")
@@ -1252,8 +1323,13 @@ def _process_callback(
                 raise NeedsReconciliationError(
                     f"Post-mutation record failed and compensation is unverified: {rollback_exc}"
                 ) from exc
+            if audit_side_effect:
+                raise NeedsReconciliationError(
+                    "Task mutation was compensated but audit/action completion "
+                    "requires reconciliation"
+                ) from exc
             raise MutationRolledBackError(
-                f"Post-mutation record failed and parent plan was compensated: {exc}"
+                f"Post-mutation record failed and mutation plan was compensated: {exc}"
             ) from exc
         raise
     return {"idempotent": False, "action_id": action_id, "result": result}
@@ -1348,6 +1424,8 @@ def main() -> int:
         return 0
     if not args.chat_id:
         raise RuntimeError("HERMES_TASK_CHAT_ID or --chat-id is required with --send")
+    if normalize_status(os.getenv("TASK_ONLY_MODE")) not in {"TRUE", "YES", "1"}:
+        raise RuntimeError("TASK_ONLY_MODE=true is required before sending a digest")
     sent = send_digest(
         repo,
         TelegramClient(os.getenv("TELEGRAM_BOT_TOKEN", "").strip()),

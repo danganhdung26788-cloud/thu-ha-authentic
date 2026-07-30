@@ -13,7 +13,7 @@ CALLBACK_ANCHOR = "        # --- Model picker callbacks ---"
 TEXT_ANCHOR = "        if not self._should_process_message(msg):"
 
 CALLBACK_BLOCK = f"""{CALLBACK_BEGIN}
-        if data.startswith((\"ht:\", \"htp:\", \"htt:\", \"htc:\")):
+        if data.startswith((\"ht:\", \"htp:\", \"htt:\", \"htc:\", \"htk:\")):
             import sys
             task_integration_root = \"/opt/data/tha-integrations\"
             if task_integration_root not in sys.path:
