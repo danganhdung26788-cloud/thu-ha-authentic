@@ -332,6 +332,30 @@ async def receive_webhook(
     return {"ok": True}
 
 
+@app.post("/webhook/telegram-task-checklist")
+async def receive_task_checklist_callback(
+    request: Request,
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+) -> dict[str, object]:
+    """Receive Telegram inline-button callbacks for Issue #39."""
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="invalid json") from exc
+    try:
+        task_checklist = importlib.import_module(
+            "integrations.hermes.task_checklist"
+        )
+        return task_checklist.handle_telegram_update(
+            payload,
+            secret_header=x_telegram_bot_api_secret_token or "",
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (ValueError, LookupError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     runtime = load_runtime_env()
