@@ -1,5 +1,3 @@
-BEGIN;
-
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version text PRIMARY KEY,
   applied_at timestamptz NOT NULL DEFAULT now()
@@ -104,5 +102,3 @@ CREATE TABLE IF NOT EXISTS outbox_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_outbox_unpublished ON outbox_events(outbox_id) WHERE published_at IS NULL;
-
-COMMIT;
