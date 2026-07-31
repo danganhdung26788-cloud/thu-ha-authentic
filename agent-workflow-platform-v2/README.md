@@ -9,33 +9,31 @@ DECISION=APPROVED
 MODE=GREENFIELD_PARALLEL
 V1_RUNTIME_CHANGED=FALSE
 V1_DELETION_ALLOWED=FALSE
-CURRENT_PHASE=FOUNDATION
+CODEBASE=PRODUCTION_BASELINE
+RUNTIME_DEPLOYED=FALSE
+CUTOVER_PHASE=V1_ONLY
 ```
 
-This directory is a new codebase. It does not share task state, queue leases, runtime folders, secrets or write paths with V1.
+This directory is a separate codebase. V2 does not share task state, queue leases, runtime folders, object buckets, secrets or write paths with V1.
 
-## Objectives
+## Architecture
 
-- Convert Routing 3.0 into executable, testable orchestration logic.
-- Allow autonomous work inside registered Sandbox/UAT scopes.
-- Pause only for deep intervention.
-- Preserve owner/workspace isolation, audit, recovery and rollback.
-- Import V1 capabilities only through versioned contracts and adapters.
-
-## Runtime baseline
-
-- Node.js 22+
-- TypeScript strict mode
-- OpenAI Agents SDK pinned to `0.13.5`
-- Zod v4 schemas
-- PostgreSQL source of truth (next phase)
-- Redis/BullMQ queue and leases (next phase)
-- Docker sandbox on Windows (next phase)
-- Object storage for evidence and artifacts (next phase)
+- Node.js 22+ and TypeScript strict mode.
+- OpenAI Agents SDK pinned to `0.13.5`.
+- NestJS/Fastify API.
+- PostgreSQL source of truth.
+- Redis/BullMQ queue, leases and stalled-job handling.
+- Transactional outbox and stale-task recovery.
+- MinIO evidence objects with SHA-256 metadata.
+- Persistent Agent Registry, Tool Registry and owner/workspace grants.
+- Docker execution sandbox with path/executable allowlists and resource limits.
+- Codex, Hermes and Claude HTTP adapter contracts.
+- Structured redacting logs and Prometheus metrics.
+- Shadow-run and cutover state tables.
 
 ## Autonomy policy
 
-Normal operations inside Sandbox/UAT are auto-approved. The runtime must interrupt for:
+Normal actions inside a registered Sandbox/UAT owner and workspace scope are auto-approved. The runtime interrupts for deep intervention:
 
 - production changes;
 - credential or permission changes;
@@ -45,58 +43,78 @@ Normal operations inside Sandbox/UAT are auto-approved. The runtime must interru
 - significant unapproved cost;
 - access outside registered owner/workspace scope.
 
-## Current foundation
+Tool grants are enforced again at the executor boundary. A model decision alone never creates permission.
 
-- owner-scoped execution contract;
-- structured Manager Agent decision;
-- reusable `Runner` with bounded turns;
-- sensitive-data tracing disabled by default;
-- policy engine for `AUTO_APPROVE`, `REQUIRE_APPROVAL` and `DENY`;
-- deterministic policy tests.
-
-## Local configuration
-
-Copy `.env.example` to `.env`. Never commit real values.
-
-Required values include:
+## Control-plane lifecycle
 
 ```text
+QUEUED
+  -> RUNNING
+  -> COMPLETED | RETRY_WAIT | WAITING_APPROVAL | FAILED
+```
+
+Task creation is idempotent within `owner_id + workspace_id + idempotency_key`. PostgreSQL is authoritative; Redis may be recreated and reconciled from the transactional outbox.
+
+## Configuration
+
+Copy `.env.example` to a local `.env`. Never commit real values.
+
+Production topology requires unique values for:
+
+```text
+POSTGRES_PASSWORD
+MINIO_ACCESS_KEY
+MINIO_SECRET_KEY
+API_AUTH_TOKEN
+ADAPTER_AUTH_TOKEN
 OPENAI_API_KEY
 OPENAI_MANAGER_MODEL
-TASK_ID
-CORRELATION_ID
-OWNER_ID
-WORKSPACE_ID
-READ_SCOPE_JSON
-WRITE_SCOPE_JSON
+OPENAI_SPECIALIST_MODEL
 ```
 
-## Commands
+Adapter URLs remain empty until their services have passed contract and security tests.
+
+## Local validation
 
 ```bash
-npm install
+npm ci
 npm run check
+npm run migrate
 npm test
 npm run build
+npm audit --omit=dev --audit-level=high
 ```
 
-Example run:
+Validate the service topology:
 
 ```bash
-npm run dev -- "Inspect the assigned workspace and route this task"
+docker compose --env-file .env -f compose.yml config --quiet
+docker compose --env-file .env build
 ```
 
-## Migration rule
+## Start V2 in parallel
 
-V1 remains active and unchanged until V2 passes:
+Follow `docs/RUNBOOK_DEPLOYMENT_AND_ROLLBACK.md`. V1 must remain active and unchanged. The API is bound to localhost by default.
 
-1. foundation and threat-model review;
-2. control-plane and queue tests;
-3. agent and executor integration tests;
-4. shadow mode;
-5. dual-run comparison;
-6. backup/restore and recovery tests;
-7. seven-day soak;
-8. owner cutover approval.
+## Migration phases
 
-V1 deletion requires a separate decommission runbook and an expired rollback window.
+```text
+V1_ONLY -> SHADOW -> DUAL_RUN -> V2_PRIMARY -> V1_DECOMMISSIONED
+```
+
+See `docs/RUNBOOK_SHADOW_CUTOVER_AND_DECOMMISSION.md`. No phase may be skipped. V1 deletion requires 7/7 soak days, an expired rollback window and a separate destructive-change approval.
+
+## Production acceptance still required
+
+The codebase and CI baseline do not mean the Windows runtime is live. Before V2 can become primary, the following must be completed with real runtime evidence:
+
+1. deploy isolated V2 services;
+2. configure strong external secrets and approved AI models;
+3. implement and verify live Codex/Hermes/Claude adapters;
+4. pass backup/restore and recovery tests;
+5. run shadow comparison;
+6. pass dual-run UAT;
+7. execute approved cutover;
+8. pass seven consecutive soak days.
+
+V1 remains the rollback system until all gates are complete.
