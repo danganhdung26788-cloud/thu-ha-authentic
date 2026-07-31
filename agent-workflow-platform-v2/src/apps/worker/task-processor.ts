@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { Job } from 'bullmq';
 import { runSpecialistAgent } from '../../agents/specialist-agent.js';
-import type { ExecutionContext, ManagerDecision } from '../../contracts/execution-context.js';
+import type { ExecutionContext } from '../../contracts/execution-context.js';
 import {
-  claimApprovedAction,
   completeApprovedAction,
   releaseApprovedAction,
   type ApprovedActionLease,
@@ -15,30 +14,17 @@ import { createExecutorRegistry } from '../../executors/registry.js';
 import { logger } from '../../observability/logger.js';
 import { policyDecisions, taskDuration, taskTransitions } from '../../observability/metrics.js';
 import {
-  evaluateActionPolicy,
-  type ActionRequest,
-  type PolicyDecision,
-} from '../../policy/policy-engine.js';
-import {
   createTaskQueue,
   enqueueTask,
   type TaskJobData,
   type TaskJobResult,
 } from '../../queue/task-queue.js';
-import { runManagerDecision } from '../../runtime/run-manager.js';
+import { resolveAuthorizedRoute } from './route-authorizer.js';
 
 const TERMINAL = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function requestedMutation(tools: readonly string[]): boolean {
-  return tools.some((tool) => /write|delete|shell|powershell|commit|deploy|restart|update|create|send/i.test(tool));
-}
-
-function booleanPayload(payload: Record<string, unknown>, key: string): boolean {
-  return payload[key] === true;
 }
 
 async function finalizeApprovalLease(
@@ -144,18 +130,34 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
       riskLevel: task.riskLevel,
     };
 
-    approvalLease = await claimApprovedAction(taskId, executionId);
-    let manager: ManagerDecision;
-    let actionRequest: ActionRequest;
-    let policy: PolicyDecision;
+    const route = await resolveAuthorizedRoute(task, context, executionId);
+    const { manager, actionRequest, policy, authorization } = route;
+    approvalLease = route.approvalLease;
+    executorLabel = manager.executor;
+    policyDecisions.inc({ outcome: policy.outcome });
+
+    await store.appendAudit({
+      eventId: `AUD-${randomUUID()}`,
+      taskId,
+      executionId,
+      correlationId: task.correlationId,
+      ownerId: task.ownerId,
+      workspaceId: task.workspaceId,
+      eventType: 'ROUTE_AUTHORIZED',
+      actor: 'TOOL_REGISTRY',
+      details: {
+        executor: manager.executor,
+        agentId: authorization.agentId,
+        tools: authorization.tools.map((tool) => ({
+          toolId: tool.toolId,
+          riskClass: tool.riskClass,
+          adapter: tool.adapter,
+        })),
+        approvalResumed: approvalLease?.approvalId ?? null,
+      },
+    });
 
     if (approvalLease) {
-      manager = approvalLease.action.manager;
-      actionRequest = approvalLease.action.actionRequest;
-      policy = {
-        outcome: 'AUTO_APPROVE',
-        reason: `Approval ${approvalLease.approvalId} resumed the stored action under lease.`,
-      };
       await store.appendAudit({
         eventId: `AUD-${randomUUID()}`,
         taskId,
@@ -170,31 +172,7 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
           originalPolicy: approvalLease.action.policy,
         },
       });
-    } else {
-      manager = await runManagerDecision(context, task.objective);
-      const target = typeof task.payload.target === 'string' ? task.payload.target : undefined;
-      actionRequest = {
-        action: manager.nextAction,
-        mutating: requestedMutation(manager.requestedTools),
-        ...(target ? { target } : {}),
-        touchesProduction: booleanPayload(task.payload, 'touchesProduction'),
-        changesCredentials: booleanPayload(task.payload, 'changesCredentials'),
-        changesPermissions: booleanPayload(task.payload, 'changesPermissions'),
-        rewritesHistory: booleanPayload(task.payload, 'rewritesHistory'),
-        deepOperatingSystemChange: booleanPayload(task.payload, 'deepOperatingSystemChange'),
-        destructive: booleanPayload(task.payload, 'destructive'),
-        backupVerified: booleanPayload(task.payload, 'backupVerified'),
-        estimatedCostUsd: typeof task.payload.estimatedCostUsd === 'number'
-          ? task.payload.estimatedCostUsd
-          : 0,
-      };
-      policy = manager.requiresApproval
-        ? { outcome: 'REQUIRE_APPROVAL', reason: 'Manager identified deep intervention.' }
-        : evaluateActionPolicy(context, actionRequest);
     }
-
-    executorLabel = manager.executor;
-    policyDecisions.inc({ outcome: policy.outcome });
 
     if (policy.outcome === 'DENY') {
       await store.finishExecution(executionId, 'FAILED', { manager, policy }, policy.reason);
@@ -208,7 +186,7 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
         workspaceId: task.workspaceId,
         eventType: 'POLICY_DENIED',
         actor: 'POLICY_ENGINE',
-        details: { manager, policy },
+        details: { manager, policy, actionRequest },
       });
       return { taskId, status: 'FAILED' };
     }
@@ -234,7 +212,7 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
         workspaceId: task.workspaceId,
         eventType: 'APPROVAL_REQUESTED',
         actor: 'POLICY_ENGINE',
-        details: { approvalId, manager, policy },
+        details: { approvalId, manager, policy, actionRequest },
       });
       return { taskId, status: 'WAITING_APPROVAL' };
     }
