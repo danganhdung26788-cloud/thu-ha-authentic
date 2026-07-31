@@ -1,10 +1,15 @@
 import { z } from 'zod';
+import { ManagerDecisionSchema } from '../contracts/execution-context.js';
 import { withTransaction } from '../db/pool.js';
+import { ActionRequestSchema } from '../policy/policy-engine.js';
 
 const ApprovedActionSchema = z.object({
-  manager: z.record(z.string(), z.unknown()),
-  policy: z.record(z.string(), z.unknown()),
-  actionRequest: z.record(z.string(), z.unknown()),
+  manager: ManagerDecisionSchema,
+  policy: z.object({
+    outcome: z.enum(['AUTO_APPROVE', 'REQUIRE_APPROVAL', 'DENY']),
+    reason: z.string().min(1),
+  }),
+  actionRequest: ActionRequestSchema,
 });
 
 export type ApprovedAction = Readonly<{
