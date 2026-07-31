@@ -1,16 +1,26 @@
 import { randomUUID } from 'node:crypto';
 import type { Job } from 'bullmq';
-import type { ExecutionContext } from '../../contracts/execution-context.js';
+import { runSpecialistAgent } from '../../agents/specialist-agent.js';
+import type { ExecutionContext, ManagerDecision } from '../../contracts/execution-context.js';
+import { consumeApprovedAction } from '../../control-plane/approval-resume.js';
 import { PostgresControlPlaneStore } from '../../control-plane/postgres-store.js';
 import { MinioEvidenceStore } from '../../evidence/minio-evidence-store.js';
-import { createExecutorRegistry } from '../../executors/registry.js';
 import type { ExecutorResult } from '../../executors/contracts.js';
+import { createExecutorRegistry } from '../../executors/registry.js';
 import { logger } from '../../observability/logger.js';
 import { policyDecisions, taskDuration, taskTransitions } from '../../observability/metrics.js';
-import { evaluateActionPolicy } from '../../policy/policy-engine.js';
-import { createTaskQueue, enqueueTask, type TaskJobData, type TaskJobResult } from '../../queue/task-queue.js';
+import {
+  evaluateActionPolicy,
+  type ActionRequest,
+  type PolicyDecision,
+} from '../../policy/policy-engine.js';
+import {
+  createTaskQueue,
+  enqueueTask,
+  type TaskJobData,
+  type TaskJobResult,
+} from '../../queue/task-queue.js';
 import { runManagerDecision } from '../../runtime/run-manager.js';
-import { runSpecialistAgent } from '../../agents/specialist-agent.js';
 
 const TERMINAL = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
 
@@ -32,7 +42,7 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
   const evidenceStore = new MinioEvidenceStore();
   const queue = createTaskQueue();
   let executorLabel = 'UNROUTED';
-  let taskId = job.data.taskId;
+  const taskId = job.data.taskId;
   try {
     const task = await store.getTask(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
@@ -87,25 +97,57 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
       autonomyMode: task.autonomyMode,
       riskLevel: task.riskLevel,
     };
-    const manager = await runManagerDecision(context, task.objective);
+
+    const approved = await consumeApprovedAction(taskId);
+    let manager: ManagerDecision;
+    let actionRequest: ActionRequest;
+    let policy: PolicyDecision;
+
+    if (approved) {
+      manager = approved.action.manager;
+      actionRequest = approved.action.actionRequest;
+      policy = {
+        outcome: 'AUTO_APPROVE',
+        reason: `One-time approval ${approved.approvalId} resumed the stored action.`,
+      };
+      await store.appendAudit({
+        eventId: `AUD-${randomUUID()}`,
+        taskId,
+        executionId,
+        correlationId: task.correlationId,
+        ownerId: task.ownerId,
+        workspaceId: task.workspaceId,
+        eventType: 'APPROVAL_RESUMED',
+        actor: 'ORCHESTRATOR_WORKER',
+        details: {
+          approvalId: approved.approvalId,
+          originalPolicy: approved.action.policy,
+        },
+      });
+    } else {
+      manager = await runManagerDecision(context, task.objective);
+      const target = typeof task.payload.target === 'string' ? task.payload.target : undefined;
+      actionRequest = {
+        action: manager.nextAction,
+        mutating: requestedMutation(manager.requestedTools),
+        ...(target ? { target } : {}),
+        touchesProduction: booleanPayload(task.payload, 'touchesProduction'),
+        changesCredentials: booleanPayload(task.payload, 'changesCredentials'),
+        changesPermissions: booleanPayload(task.payload, 'changesPermissions'),
+        rewritesHistory: booleanPayload(task.payload, 'rewritesHistory'),
+        deepOperatingSystemChange: booleanPayload(task.payload, 'deepOperatingSystemChange'),
+        destructive: booleanPayload(task.payload, 'destructive'),
+        backupVerified: booleanPayload(task.payload, 'backupVerified'),
+        estimatedCostUsd: typeof task.payload.estimatedCostUsd === 'number'
+          ? task.payload.estimatedCostUsd
+          : 0,
+      };
+      policy = manager.requiresApproval
+        ? { outcome: 'REQUIRE_APPROVAL', reason: 'Manager identified deep intervention.' }
+        : evaluateActionPolicy(context, actionRequest);
+    }
+
     executorLabel = manager.executor;
-    const target = typeof task.payload.target === 'string' ? task.payload.target : undefined;
-    const actionRequest = {
-      action: manager.nextAction,
-      mutating: requestedMutation(manager.requestedTools),
-      ...(target ? { target } : {}),
-      touchesProduction: booleanPayload(task.payload, 'touchesProduction'),
-      changesCredentials: booleanPayload(task.payload, 'changesCredentials'),
-      changesPermissions: booleanPayload(task.payload, 'changesPermissions'),
-      rewritesHistory: booleanPayload(task.payload, 'rewritesHistory'),
-      deepOperatingSystemChange: booleanPayload(task.payload, 'deepOperatingSystemChange'),
-      destructive: booleanPayload(task.payload, 'destructive'),
-      backupVerified: booleanPayload(task.payload, 'backupVerified'),
-      estimatedCostUsd: typeof task.payload.estimatedCostUsd === 'number' ? task.payload.estimatedCostUsd : 0,
-    };
-    const policy = manager.requiresApproval
-      ? { outcome: 'REQUIRE_APPROVAL' as const, reason: 'Manager identified deep intervention.' }
-      : evaluateActionPolicy(context, actionRequest);
     policyDecisions.inc({ outcome: policy.outcome });
 
     if (policy.outcome === 'DENY') {
@@ -157,7 +199,11 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
       result = {
         status: 'SUCCEEDED',
         summary: specialist.summary,
-        output: { ...specialist.result, warnings: specialist.warnings, confidence: specialist.confidence },
+        output: {
+          ...specialist.result,
+          warnings: specialist.warnings,
+          confidence: specialist.confidence,
+        },
         evidence: [],
         retryable: false,
       };
@@ -181,7 +227,13 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
         item.mediaType,
         item.name,
       );
-      await store.recordEvidence({ ...descriptor, taskId, executionId, ownerId: task.ownerId, workspaceId: task.workspaceId });
+      await store.recordEvidence({
+        ...descriptor,
+        taskId,
+        executionId,
+        ownerId: task.ownerId,
+        workspaceId: task.workspaceId,
+      });
     }
     const resultEvidence = await evidenceStore.put(
       task.ownerId,
@@ -191,10 +243,21 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
       'application/json',
       'result.json',
     );
-    await store.recordEvidence({ ...resultEvidence, taskId, executionId, ownerId: task.ownerId, workspaceId: task.workspaceId });
+    await store.recordEvidence({
+      ...resultEvidence,
+      taskId,
+      executionId,
+      ownerId: task.ownerId,
+      workspaceId: task.workspaceId,
+    });
 
     if (result.status === 'SUCCEEDED') {
-      await store.finishExecution(executionId, 'SUCCEEDED', { manager, policy, result, resultEvidence });
+      await store.finishExecution(executionId, 'SUCCEEDED', {
+        manager,
+        policy,
+        result,
+        resultEvidence,
+      });
       taskTransitions.inc({ from: 'RUNNING', to: 'COMPLETED' });
       await store.updateTaskStatus(taskId, 'COMPLETED', { attempt });
       await store.appendAudit({
@@ -211,22 +274,33 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
       return { taskId, status: 'COMPLETED' };
     }
 
-    throw Object.assign(new Error(result.summary), { retryable: result.retryable, result });
+    throw Object.assign(new Error(result.summary), {
+      retryable: result.retryable,
+      result,
+    });
   } catch (error) {
     const message = errorMessage(error);
     const task = await store.getTask(taskId).catch(() => null);
     if (!task) throw error;
     const attempt = Math.max(1, task.attempt);
     const executionId = `EXE-${taskId}-${attempt}`;
-    const retryable = Boolean((error as { retryable?: unknown }).retryable) || error instanceof TypeError;
+    const retryable = Boolean((error as { retryable?: unknown }).retryable)
+      || error instanceof TypeError;
     const canRetry = retryable && attempt < task.maxAttempts;
     await store.finishExecution(executionId, 'FAILED', null, message).catch(() => undefined);
     if (canRetry) {
       const delay = Math.min(15 * 60_000, 30_000 * 2 ** (attempt - 1));
       const nextRunAt = new Date(Date.now() + delay);
       taskTransitions.inc({ from: 'RUNNING', to: 'RETRY_WAIT' });
-      await store.updateTaskStatus(taskId, 'RETRY_WAIT', { attempt, nextRunAt, lastError: message });
-      await enqueueTask(queue, job.data, { delay, jobId: `${job.data.ownerId}:${job.data.workspaceId}:${taskId}:retry:${attempt + 1}` });
+      await store.updateTaskStatus(taskId, 'RETRY_WAIT', {
+        attempt,
+        nextRunAt,
+        lastError: message,
+      });
+      await enqueueTask(queue, job.data, {
+        delay,
+        jobId: `${job.data.ownerId}:${job.data.workspaceId}:${taskId}:retry:${attempt + 1}`,
+      });
       await store.appendAudit({
         eventId: `AUD-${randomUUID()}`,
         taskId,
@@ -236,7 +310,11 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
         workspaceId: task.workspaceId,
         eventType: 'TASK_RETRY_SCHEDULED',
         actor: 'ORCHESTRATOR_WORKER',
-        details: { attempt, nextRunAt: nextRunAt.toISOString(), error: message },
+        details: {
+          attempt,
+          nextRunAt: nextRunAt.toISOString(),
+          error: message,
+        },
       });
       return { taskId, status: 'RETRY_WAIT' };
     }
