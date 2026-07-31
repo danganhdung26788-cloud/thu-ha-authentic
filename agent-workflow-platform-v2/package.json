@@ -1,6 +1,6 @@
 {
   "name": "agent-workflow-platform-v2",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Production-grade AI workflow orchestration platform using OpenAI Agents SDK.",
@@ -11,16 +11,33 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
-    "start": "node dist/index.js",
-    "dev": "tsx src/index.ts",
-    "test": "node --import tsx --test test/**/*.test.ts"
+    "dev:api": "tsx src/apps/api/main.ts",
+    "dev:worker": "tsx src/apps/worker/main.ts",
+    "start:api": "node dist/src/apps/api/main.js",
+    "start:worker": "node dist/src/apps/worker/main.js",
+    "migrate": "tsx src/db/migrate.ts",
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "test:integration": "node --import tsx --test test/integration/**/*.test.ts"
   },
   "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-fastify": "^11.0.0",
     "@openai/agents": "0.13.5",
+    "bullmq": "^5.0.0",
+    "fastify": "^5.0.0",
+    "ioredis": "^5.0.0",
+    "minio": "^8.0.0",
+    "pg": "^8.0.0",
+    "pino": "^9.0.0",
+    "prom-client": "^15.0.0",
+    "reflect-metadata": "^0.2.0",
+    "rxjs": "^7.8.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.0.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"
   }
