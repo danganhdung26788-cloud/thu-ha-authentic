@@ -124,7 +124,9 @@ jobs:
             $parseErrors = $null
             [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
             if ($parseErrors.Count -gt 0) {
-              $errors += $parseErrors | ForEach-Object { "${($_.Extent.File)}:${($_.Extent.StartLineNumber)} $($_.Message)" }
+              $errors += $parseErrors | ForEach-Object {
+                '{0}:{1} {2}' -f $_.Extent.File, $_.Extent.StartLineNumber, $_.Message
+              }
             }
           }
           if ($errors.Count -gt 0) { throw ($errors -join "`n") }
