@@ -44,7 +44,7 @@ export async function buildHostAdapterServer(env: HostAdapterEnv) {
 
   app.addHook('onRequest', async (request, reply) => {
     if (!tokenMatches(request.headers.authorization, env.HOST_ADAPTER_TOKEN)) {
-      await reply.code(401).send({ error: 'unauthorized' });
+      return reply.code(401).send({ error: 'unauthorized' });
     }
   });
 
