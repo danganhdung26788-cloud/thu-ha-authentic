@@ -1,8 +1,10 @@
-import { BadRequestException, Body, Controller, Param, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Param, Post, UseGuards } from '@nestjs/common';
 import { ZodError } from 'zod';
+import { ApiTokenGuard } from './api-token.guard.js';
 import { PlatformService } from './platform.service.js';
 
 @Controller('/v1/approvals')
+@UseGuards(ApiTokenGuard)
 export class ApprovalController {
   constructor(private readonly platform: PlatformService) {}
 
