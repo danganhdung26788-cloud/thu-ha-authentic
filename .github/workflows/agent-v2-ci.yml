@@ -45,6 +45,8 @@ jobs:
       MINIO_ACCESS_KEY: integration-key
       MINIO_SECRET_KEY: integration-secret-value
       POSTGRES_PASSWORD: compose-validation-password
+      API_AUTH_TOKEN: ci-api-auth-token-value
+      ADAPTER_AUTH_TOKEN: ci-adapter-auth-token-value
       OPENAI_AGENTS_DISABLE_TRACING: '1'
     defaults:
       run:
