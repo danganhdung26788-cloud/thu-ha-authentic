@@ -91,6 +91,13 @@ export function evaluateActionPolicy(
     return { outcome: 'DENY', reason: 'READ_ONLY mode blocks mutations.' };
   }
 
+  if (request.mutating && !request.target) {
+    return {
+      outcome: 'DENY',
+      reason: 'Mutating actions require an explicit target inside WRITE_SCOPE.',
+    };
+  }
+
   if (request.target) {
     try {
       if (!isWithinScope(
