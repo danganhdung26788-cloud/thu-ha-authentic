@@ -8,6 +8,7 @@ const OptionalString = z.preprocess(
 
 export const HostAdapterEnvSchema = z.object({
   HOST_ADAPTER_ROLE: z.enum(['HERMES', 'CODEX']),
+  HOST_ADAPTER_BIND: z.string().min(1).default('127.0.0.1'),
   HOST_ADAPTER_PORT: z.coerce.number().int().min(1).max(65535),
   HOST_ADAPTER_TOKEN: z.string().min(24),
   HOST_ADAPTER_REGISTRY_PATH: z.string().min(1),
