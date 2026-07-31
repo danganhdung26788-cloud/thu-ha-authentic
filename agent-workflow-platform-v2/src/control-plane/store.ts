@@ -21,6 +21,18 @@ export type ApprovalInput = Readonly<{
   action: Record<string, unknown>;
 }>;
 
+export type EvidenceInput = Readonly<{
+  evidenceId: string;
+  taskId: string;
+  executionId?: string;
+  ownerId: string;
+  workspaceId: string;
+  objectKey: string;
+  sha256: string;
+  mediaType: string;
+  sizeBytes: number;
+}>;
+
 export interface ControlPlaneStore {
   createTask(input: CreateTaskInput): Promise<{ task: TaskRecord; created: boolean }>;
   getTask(taskId: string): Promise<TaskRecord | null>;
@@ -41,6 +53,7 @@ export interface ControlPlaneStore {
     error?: string | null,
   ): Promise<void>;
   createApproval(input: ApprovalInput): Promise<void>;
+  recordEvidence(input: EvidenceInput): Promise<void>;
   appendAudit(event: AuditEventInput): Promise<void>;
   healthCheck(): Promise<boolean>;
 }
