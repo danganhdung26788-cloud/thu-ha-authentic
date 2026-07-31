@@ -7,6 +7,9 @@ const identities: Record<ManagerDecision['executor'], string> = {
   HERMES: 'hermes',
   CLAUDE_REVIEW: 'claude-review',
   SPECIALIST_AGENT: 'specialist',
+  GEMINI: 'gemini',
+  NOTEBOOKLM: 'notebooklm',
+  CANVA: 'canva',
 };
 
 const expectedAdapters: Partial<Record<ManagerDecision['executor'], ReadonlySet<string>>> = {
@@ -15,6 +18,9 @@ const expectedAdapters: Partial<Record<ManagerDecision['executor'], ReadonlySet<
   CLAUDE_REVIEW: new Set(['CLAUDE_REVIEW']),
   SPECIALIST_AGENT: new Set(['SPECIALIST_AGENT']),
   CHATGPT: new Set(['SPECIALIST_AGENT']),
+  GEMINI: new Set(['GEMINI']),
+  NOTEBOOKLM: new Set(['NOTEBOOKLM']),
+  CANVA: new Set(['CANVA']),
 };
 
 export type RoutingAuthorization = Readonly<{
