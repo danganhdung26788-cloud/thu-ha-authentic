@@ -3,8 +3,7 @@ import { Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { z } from 'zod';
 import { PostgresControlPlaneStore } from '../../control-plane/postgres-store.js';
 import { MinioEvidenceStore } from '../../evidence/minio-evidence-store.js';
-import { logger } from '../../observability/logger.js';
-import { createTaskQueue, enqueueTask } from '../../queue/task-queue.js';
+import { createTaskQueue } from '../../queue/task-queue.js';
 
 const SubmitTaskSchema = z.object({
   taskId: z.string().min(1).optional(),
@@ -47,28 +46,12 @@ export class PlatformService implements OnApplicationShutdown {
         workspaceId: parsed.workspaceId,
         eventType: 'TASK_CREATED',
         actor: 'API',
-        details: { autonomyMode: parsed.autonomyMode, riskLevel: parsed.riskLevel },
+        details: {
+          autonomyMode: parsed.autonomyMode,
+          riskLevel: parsed.riskLevel,
+          dispatch: 'TRANSACTIONAL_OUTBOX',
+        },
       });
-      try {
-        await enqueueTask(this.#queue, {
-          taskId,
-          correlationId,
-          ownerId: parsed.ownerId,
-          workspaceId: parsed.workspaceId,
-        });
-      } catch (error) {
-        logger.warn({ err: error, taskId }, 'Immediate enqueue failed; transactional outbox will retry');
-        await this.#store.appendAudit({
-          eventId: `AUD-${randomUUID()}`,
-          taskId,
-          correlationId,
-          ownerId: parsed.ownerId,
-          workspaceId: parsed.workspaceId,
-          eventType: 'QUEUE_ENQUEUE_DEFERRED',
-          actor: 'API',
-          details: { reason: error instanceof Error ? error.message : String(error) },
-        });
-      }
     }
     return { created, task };
   }
