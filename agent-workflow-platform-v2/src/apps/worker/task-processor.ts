@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { Job } from 'bullmq';
 import { runSpecialistAgent } from '../../agents/specialist-agent.js';
 import type { ExecutionContext, ManagerDecision } from '../../contracts/execution-context.js';
-import { consumeApprovedAction } from '../../control-plane/approval-resume.js';
+import {
+  claimApprovedAction,
+  completeApprovedAction,
+  releaseApprovedAction,
+  type ApprovedActionLease,
+} from '../../control-plane/approval-resume.js';
 import { PostgresControlPlaneStore } from '../../control-plane/postgres-store.js';
 import { MinioEvidenceStore } from '../../evidence/minio-evidence-store.js';
 import type { ExecutorResult } from '../../executors/contracts.js';
@@ -36,12 +41,53 @@ function booleanPayload(payload: Record<string, unknown>, key: string): boolean 
   return payload[key] === true;
 }
 
+async function finalizeApprovalLease(
+  store: PostgresControlPlaneStore,
+  lease: ApprovedActionLease,
+  context: ExecutionContext,
+): Promise<void> {
+  try {
+    await completeApprovedAction(lease.approvalId, lease.executionId);
+    await store.appendAudit({
+      eventId: `AUD-${randomUUID()}`,
+      taskId: context.taskId,
+      executionId: lease.executionId,
+      correlationId: context.correlationId,
+      ownerId: context.ownerId,
+      workspaceId: context.workspaceId,
+      eventType: 'APPROVAL_EXECUTED',
+      actor: 'ORCHESTRATOR_WORKER',
+      details: { approvalId: lease.approvalId },
+    });
+  } catch (error) {
+    logger.error(
+      { err: error, approvalId: lease.approvalId, taskId: context.taskId },
+      'Task completed but approval execution marker could not be finalized',
+    );
+    await store.appendAudit({
+      eventId: `AUD-${randomUUID()}`,
+      taskId: context.taskId,
+      executionId: lease.executionId,
+      correlationId: context.correlationId,
+      ownerId: context.ownerId,
+      workspaceId: context.workspaceId,
+      eventType: 'APPROVAL_MARKER_FINALIZATION_FAILED',
+      actor: 'ORCHESTRATOR_WORKER',
+      details: {
+        approvalId: lease.approvalId,
+        error: errorMessage(error),
+      },
+    }).catch(() => undefined);
+  }
+}
+
 export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Promise<TaskJobResult> {
   const started = performance.now();
   const store = new PostgresControlPlaneStore();
   const evidenceStore = new MinioEvidenceStore();
   const queue = createTaskQueue();
   let executorLabel = 'UNROUTED';
+  let approvalLease: ApprovedActionLease | null = null;
   const taskId = job.data.taskId;
   try {
     const task = await store.getTask(taskId);
@@ -98,17 +144,17 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
       riskLevel: task.riskLevel,
     };
 
-    const approved = await consumeApprovedAction(taskId);
+    approvalLease = await claimApprovedAction(taskId, executionId);
     let manager: ManagerDecision;
     let actionRequest: ActionRequest;
     let policy: PolicyDecision;
 
-    if (approved) {
-      manager = approved.action.manager;
-      actionRequest = approved.action.actionRequest;
+    if (approvalLease) {
+      manager = approvalLease.action.manager;
+      actionRequest = approvalLease.action.actionRequest;
       policy = {
         outcome: 'AUTO_APPROVE',
-        reason: `One-time approval ${approved.approvalId} resumed the stored action.`,
+        reason: `Approval ${approvalLease.approvalId} resumed the stored action under lease.`,
       };
       await store.appendAudit({
         eventId: `AUD-${randomUUID()}`,
@@ -120,8 +166,8 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
         eventType: 'APPROVAL_RESUMED',
         actor: 'ORCHESTRATOR_WORKER',
         details: {
-          approvalId: approved.approvalId,
-          originalPolicy: approved.action.policy,
+          approvalId: approvalLease.approvalId,
+          originalPolicy: approvalLease.action.policy,
         },
       });
     } else {
@@ -271,6 +317,7 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
         actor: manager.executor,
         details: { summary: result.summary, resultEvidence },
       });
+      if (approvalLease) await finalizeApprovalLease(store, approvalLease, context);
       return { taskId, status: 'COMPLETED' };
     }
 
@@ -279,6 +326,15 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
       result,
     });
   } catch (error) {
+    if (approvalLease) {
+      await releaseApprovedAction(approvalLease.approvalId, approvalLease.executionId)
+        .catch((releaseError: unknown) => {
+          logger.error(
+            { err: releaseError, approvalId: approvalLease?.approvalId, taskId },
+            'Failed to release approval resume lease',
+          );
+        });
+    }
     const message = errorMessage(error);
     const task = await store.getTask(taskId).catch(() => null);
     if (!task) throw error;
