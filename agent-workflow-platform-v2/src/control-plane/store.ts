@@ -36,6 +36,11 @@ export type ApprovalDecisionResult = Readonly<{
   decision: 'APPROVED' | 'REJECTED';
 }>;
 
+export type ApprovedAction = Readonly<{
+  approvalId: string;
+  action: Record<string, unknown>;
+}>;
+
 export type EvidenceInput = Readonly<{
   evidenceId: string;
   taskId: string;
@@ -77,6 +82,7 @@ export interface ControlPlaneStore {
   ): Promise<void>;
   createApproval(input: ApprovalInput): Promise<void>;
   decideApproval(input: ApprovalDecisionInput): Promise<ApprovalDecisionResult>;
+  consumeApprovedAction(taskId: string): Promise<ApprovedAction | null>;
   recordEvidence(input: EvidenceInput): Promise<void>;
   appendAudit(event: AuditEventInput): Promise<void>;
   claimOutbox(limit?: number): Promise<OutboxEvent[]>;
