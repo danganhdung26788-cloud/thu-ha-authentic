@@ -1,9 +1,11 @@
 import { z } from 'zod';
 
-const BooleanStringSchema = z
-  .enum(['true', 'false'])
-  .default('false')
-  .transform((value) => value === 'true');
+function booleanString(defaultValue: 'true' | 'false') {
+  return z
+    .enum(['true', 'false'])
+    .default(defaultValue)
+    .transform((value) => value === 'true');
+}
 
 const OptionalUrlSchema = z.preprocess(
   (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
@@ -28,7 +30,7 @@ export const EnvSchema = z.object({
   QUEUE_NAME: z.string().min(1).default('agent-workflow-v2'),
   MINIO_ENDPOINT: z.string().min(1).default('localhost'),
   MINIO_PORT: z.coerce.number().int().min(1).max(65535).default(9000),
-  MINIO_USE_SSL: BooleanStringSchema,
+  MINIO_USE_SSL: booleanString('false'),
   MINIO_ACCESS_KEY: z.string().min(1).default('agent-v2'),
   MINIO_SECRET_KEY: z.string().min(8).default('agent-v2-local-secret'),
   MINIO_BUCKET: z.string().min(3).default('agent-v2-evidence'),
@@ -36,7 +38,7 @@ export const EnvSchema = z.object({
   GOOGLE_API_KEY: OptionalSecretSchema,
   GEMINI_MODEL: OptionalStringSchema,
   GEMINI_API_VERSION: z.enum(['v1', 'v1beta']).default('v1'),
-  NOTEBOOKLM_SOURCE_PACKAGE_ONLY: BooleanStringSchema.default('true'),
+  NOTEBOOKLM_SOURCE_PACKAGE_ONLY: booleanString('true'),
   CANVA_ADAPTER_URL: OptionalUrlSchema,
   CANVA_ACCESS_TOKEN: OptionalSecretSchema,
   API_AUTH_TOKEN: OptionalSecretSchema,
