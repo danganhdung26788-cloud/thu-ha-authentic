@@ -1,6 +1,7 @@
 import { Agent, Runner } from '@openai/agents';
 import { z } from 'zod';
 import type { ExecutionContext } from '../contracts/execution-context.js';
+import { AgentRegistryStore } from '../registry/agent-registry.js';
 
 const SpecialistOutputSchema = z.object({
   summary: z.string().min(1),
@@ -16,10 +17,12 @@ export async function runSpecialistAgent(
   objective: string,
   instructions: string,
 ): Promise<SpecialistOutput> {
-  const model = process.env.OPENAI_SPECIALIST_MODEL?.trim();
-  if (!model) throw new Error('OPENAI_SPECIALIST_MODEL is required.');
+  const registered = await new AgentRegistryStore().get('specialist');
+  if (registered?.status !== 'ACTIVE') throw new Error('Specialist Agent is not ACTIVE.');
+  const model = registered.model?.trim() || process.env.OPENAI_SPECIALIST_MODEL?.trim();
+  if (!model) throw new Error('Specialist model is not configured in Agent Registry or OPENAI_SPECIALIST_MODEL.');
   const agent = new Agent({
-    name: 'Workflow V2 Specialist',
+    name: registered.displayName,
     model,
     outputType: SpecialistOutputSchema,
     instructions: [
