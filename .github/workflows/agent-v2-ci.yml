@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   validate:
@@ -52,8 +52,11 @@ jobs:
       run:
         working-directory: agent-workflow-platform-v2
     steps:
-      - name: Checkout
+      - name: Checkout V2 branch
         uses: actions/checkout@v4
+        with:
+          ref: v2/agents-sdk-platform
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
@@ -63,15 +66,21 @@ jobs:
       - name: Use npm 11
         run: npm install --global npm@11
 
-      - name: Generate patched lockfile artifact
+      - name: Generate patched lockfile
         run: npm install --package-lock-only --ignore-scripts
 
-      - name: Upload generated lockfile
-        uses: actions/upload-artifact@v4
-        with:
-          name: agent-v2-package-lock
-          path: agent-workflow-platform-v2/package-lock.json
-          if-no-files-found: error
+      - name: Commit patched lockfile once
+        working-directory: .
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add agent-workflow-platform-v2/package-lock.json
+          if git diff --cached --quiet; then
+            echo "Lockfile already current"
+          else
+            git commit -m "build(v2): lock patched dependency graph"
+            git push origin HEAD:v2/agents-sdk-platform
+          fi
 
       - name: Install locked dependencies
         run: npm ci --ignore-scripts
