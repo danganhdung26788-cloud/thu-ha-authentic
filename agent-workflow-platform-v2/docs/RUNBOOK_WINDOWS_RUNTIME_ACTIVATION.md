@@ -14,6 +14,7 @@ V1_DELETION_ALLOWED=FALSE
 ## Components
 
 - Docker Desktop: PostgreSQL, Redis, MinIO, API and worker.
+- Internal operations dashboard: `http://127.0.0.1:3100/admin`.
 - Windows host adapter 3201: Hermes bounded executor.
 - Windows host adapter 3202: Codex SDK executor.
 - Scheduled Tasks:
@@ -32,34 +33,61 @@ V1_DELETION_ALLOWED=FALSE
 
 The host adapters use `0.0.0.0` so Docker can reach them through `host.docker.internal`. Bearer authentication, owner/workspace checks and the Windows Firewall gate remain mandatory.
 
-## One-command deployment
+## Deployment modes
 
-Run in an elevated PowerShell only when approving the firewall change:
+### Infrastructure only
+
+Use this mode before OpenAI credentials/models are configured:
 
 ```powershell
 Set-Location <repository>\agent-workflow-platform-v2
-.\scripts\windows\Deploy-AgentV2.ps1 -ConfigureFirewall
+.\scripts\windows\Deploy-AgentV2.ps1 -InfrastructureOnly
 ```
 
-Without a firewall change:
+This starts PostgreSQL, Redis, MinIO, API, worker and both host adapters, then runs smoke tests. AI task execution remains intentionally inactive. Shadow cannot be entered in this mode.
+
+### Live AI runtime
+
+Configure these local `.env` values first:
+
+```text
+OPENAI_API_KEY
+OPENAI_MANAGER_MODEL
+OPENAI_SPECIALIST_MODEL
+```
+
+Then run:
 
 ```powershell
 .\scripts\windows\Deploy-AgentV2.ps1
 ```
 
-The deployment script:
+The deployment script rejects live activation when any required OpenAI value is empty.
+
+### Firewall change
+
+Run in an elevated PowerShell only when explicitly approving the firewall change:
+
+```powershell
+.\scripts\windows\Deploy-AgentV2.ps1 -ConfigureFirewall
+```
+
+The firewall rules allow ports 3201 and 3202 from `LocalSubnet` on Domain/Private profiles only. Public profile is not opened.
+
+## What deployment performs
 
 1. verifies Node, npm, Git and Docker;
 2. creates random local secrets when `.env` is absent;
 3. keeps Gemini and Canva API settings empty;
-4. installs the exact lockfile;
-5. runs type-check, tests and build;
-6. checks Codex CLI availability;
-7. starts the isolated Docker topology;
-8. registers hidden host-adapter Scheduled Tasks;
-9. runs health/readiness smoke tests.
+4. validates live OpenAI configuration unless `-InfrastructureOnly` is used;
+5. installs the exact lockfile;
+6. runs type-check, tests and build;
+7. checks Codex CLI availability;
+8. starts the isolated Docker topology;
+9. registers hidden host-adapter Scheduled Tasks;
+10. runs health/readiness smoke tests.
 
-It does not automatically enter Shadow unless `-EnterShadow` is supplied.
+It does not automatically enter Shadow unless `-EnterShadow` is supplied. `-EnterShadow` is blocked in infrastructure-only mode.
 
 ## Workspace registry
 
@@ -94,7 +122,9 @@ Allowed tool calls:
 - `runtime.inspect`
 - `scheduled-task.manage` using the `Hermes-V2-` prefix
 
-Every file operation is checked against both the persistent workspace registry and the task `READ_SCOPE`/`WRITE_SCOPE`. Writes use target read-back. Host results are stored as idempotent receipts by owner/workspace/task.
+Every file operation is checked against both the persistent workspace registry and the task `READ_SCOPE`/`WRITE_SCOPE`. Writes use target read-back.
+
+Host results are stored as idempotent receipts by owner/workspace/task only when the result is final. Retryable failures are not persisted as final receipts, so the control plane may safely retry them.
 
 ## Codex execution policy
 
@@ -122,9 +152,30 @@ Acceptance:
 - API `/health` PASS;
 - API `/ready` PASS;
 - PostgreSQL, Redis and MinIO PASS;
+- API container can reach every configured executor adapter;
 - Hermes adapter health/readiness PASS;
 - Codex adapter health/readiness PASS;
 - both Scheduled Tasks registered and enabled.
+
+The `/ready` endpoint fails when a configured host adapter cannot be reached from Docker. This prevents a false-positive deployment based only on localhost checks.
+
+## Operations dashboard
+
+Open:
+
+```text
+http://127.0.0.1:3100/admin
+```
+
+Enter the local `API_AUTH_TOKEN`. The dashboard can:
+
+- create bounded tasks;
+- filter tasks by owner/workspace/status;
+- inspect executions, audit and evidence metadata;
+- approve or reject deep interventions;
+- display adapter health and cutover phase.
+
+The token is stored only in the current tab's `sessionStorage`.
 
 ## Backup
 
@@ -155,7 +206,7 @@ The script verifies every checksum, stops API/worker, restores PostgreSQL and Mi
 
 ## Shadow activation
 
-After deployment and backup PASS:
+After live AI deployment and backup PASS:
 
 ```powershell
 .\scripts\windows\Start-AgentV2Shadow.ps1
