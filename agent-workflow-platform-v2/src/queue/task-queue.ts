@@ -46,10 +46,9 @@ export async function enqueueTask(
   data: TaskJobData,
   options: JobsOptions = {},
 ): Promise<void> {
-  await queue.add('execute-task', data, {
-    jobId: defaultTaskJobId(data),
-    ...options,
-  });
+  const { jobId, ...rest } = options;
+  const safeJobId = jobId ? jobKeySegment(String(jobId)) : defaultTaskJobId(data);
+  await queue.add('execute-task', data, { jobId: safeJobId, ...rest });
 }
 
 export function createTaskWorker(
