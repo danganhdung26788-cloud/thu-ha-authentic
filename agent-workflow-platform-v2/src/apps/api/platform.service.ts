@@ -3,6 +3,7 @@ import { Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { z } from 'zod';
 import { PostgresControlPlaneStore } from '../../control-plane/postgres-store.js';
 import { MinioEvidenceStore } from '../../evidence/minio-evidence-store.js';
+import { logger } from '../../observability/logger.js';
 import { createTaskQueue, enqueueTask } from '../../queue/task-queue.js';
 
 const SubmitTaskSchema = z.object({
@@ -20,6 +21,12 @@ const SubmitTaskSchema = z.object({
   maxAttempts: z.number().int().min(1).max(10).default(3),
 });
 
+const ApprovalDecisionSchema = z.object({
+  decision: z.enum(['APPROVED', 'REJECTED']),
+  actor: z.string().min(1),
+  reason: z.string().min(1).optional(),
+});
+
 @Injectable()
 export class PlatformService implements OnApplicationShutdown {
   readonly #store = new PostgresControlPlaneStore();
@@ -30,11 +37,7 @@ export class PlatformService implements OnApplicationShutdown {
     const parsed = SubmitTaskSchema.parse(input);
     const taskId = parsed.taskId ?? `TASK-${randomUUID()}`;
     const correlationId = parsed.correlationId ?? `CORR-${randomUUID()}`;
-    const { task, created } = await this.#store.createTask({
-      ...parsed,
-      taskId,
-      correlationId,
-    });
+    const { task, created } = await this.#store.createTask({ ...parsed, taskId, correlationId });
     if (created) {
       await this.#store.appendAudit({
         eventId: `AUD-${randomUUID()}`,
@@ -46,14 +49,46 @@ export class PlatformService implements OnApplicationShutdown {
         actor: 'API',
         details: { autonomyMode: parsed.autonomyMode, riskLevel: parsed.riskLevel },
       });
-      await enqueueTask(this.#queue, {
-        taskId,
-        correlationId,
-        ownerId: parsed.ownerId,
-        workspaceId: parsed.workspaceId,
-      });
+      try {
+        await enqueueTask(this.#queue, {
+          taskId,
+          correlationId,
+          ownerId: parsed.ownerId,
+          workspaceId: parsed.workspaceId,
+        });
+      } catch (error) {
+        logger.warn({ err: error, taskId }, 'Immediate enqueue failed; transactional outbox will retry');
+        await this.#store.appendAudit({
+          eventId: `AUD-${randomUUID()}`,
+          taskId,
+          correlationId,
+          ownerId: parsed.ownerId,
+          workspaceId: parsed.workspaceId,
+          eventType: 'QUEUE_ENQUEUE_DEFERRED',
+          actor: 'API',
+          details: { reason: error instanceof Error ? error.message : String(error) },
+        });
+      }
     }
     return { created, task };
+  }
+
+  async decideApproval(approvalId: string, input: unknown): Promise<Record<string, unknown>> {
+    const parsed = ApprovalDecisionSchema.parse(input);
+    const decision = await this.#store.decideApproval({ approvalId, ...parsed });
+    const task = await this.#store.getTask(decision.taskId);
+    if (!task) throw new Error(`Task missing after approval decision: ${decision.taskId}`);
+    await this.#store.appendAudit({
+      eventId: `AUD-${randomUUID()}`,
+      taskId: task.taskId,
+      correlationId: task.correlationId,
+      ownerId: task.ownerId,
+      workspaceId: task.workspaceId,
+      eventType: parsed.decision === 'APPROVED' ? 'APPROVAL_APPROVED' : 'APPROVAL_REJECTED',
+      actor: parsed.actor,
+      details: { approvalId, reason: parsed.reason ?? null },
+    });
+    return { decision, task };
   }
 
   async getTask(taskId: string): Promise<Record<string, unknown> | null> {
