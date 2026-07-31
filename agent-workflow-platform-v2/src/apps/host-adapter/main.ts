@@ -5,7 +5,7 @@ const env = getHostAdapterEnv();
 const app = await buildHostAdapterServer(env);
 
 await app.listen({
-  host: '127.0.0.1',
+  host: env.HOST_ADAPTER_BIND,
   port: env.HOST_ADAPTER_PORT,
 });
 
