@@ -5,6 +5,7 @@ const adapterAgentIds: Record<string, string> = {
   hermes: 'hermes',
   codex: 'codex',
   'claude-review': 'claude-review',
+  canva: 'canva',
 };
 
 export class HttpExecutorAdapter implements ExecutorAdapter {

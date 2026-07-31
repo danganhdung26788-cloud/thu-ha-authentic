@@ -1,4 +1,7 @@
 import { Module } from '@nestjs/common';
+import { AdminController } from './admin.controller.js';
+import { AdminQueryService } from './admin-query.service.js';
+import { AdminWebController } from './admin-web.controller.js';
 import { AgentController } from './agent.controller.js';
 import { AgentRegistryService } from './agent-registry.service.js';
 import { ApiTokenGuard } from './api-token.guard.js';
@@ -12,12 +15,19 @@ import { ToolController } from './tool.controller.js';
 @Module({
   controllers: [
     HealthController,
+    AdminWebController,
+    AdminController,
     TaskController,
     ApprovalController,
     AgentController,
     ToolController,
     CutoverController,
   ],
-  providers: [PlatformService, AgentRegistryService, ApiTokenGuard],
+  providers: [
+    PlatformService,
+    AdminQueryService,
+    AgentRegistryService,
+    ApiTokenGuard,
+  ],
 })
 export class AppModule {}

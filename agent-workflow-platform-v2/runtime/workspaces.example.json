@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "workspaces": [
+    {
+      "ownerId": "danganhdung",
+      "workspaceId": "workflow-v2-sandbox",
+      "root": "D:/AI_WORKSPACE/workflow-v2-sandbox",
+      "readRoots": [
+        "D:/AI_WORKSPACE/workflow-v2-sandbox"
+      ],
+      "writeRoots": [
+        "D:/AI_WORKSPACE/workflow-v2-sandbox"
+      ],
+      "allowedExecutables": [
+        "pwsh.exe",
+        "powershell.exe",
+        "git.exe",
+        "node.exe",
+        "npm.cmd",
+        "docker.exe",
+        "schtasks.exe"
+      ],
+      "allowedScripts": [
+        "scripts/operations/Check-WorkflowV2.ps1",
+        "scripts/operations/Restart-WorkflowV2.ps1",
+        "scripts/operations/Backup-WorkflowV2.ps1"
+      ],
+      "scheduledTaskPrefix": "Hermes-V2-"
+    }
+  ]
+}
