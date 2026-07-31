@@ -14,6 +14,14 @@ export type TaskJobResult = Readonly<{
   status: 'COMPLETED' | 'WAITING_APPROVAL' | 'RETRY_WAIT' | 'FAILED';
 }>;
 
+function jobKeySegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+export function defaultTaskJobId(data: TaskJobData): string {
+  return [data.ownerId, data.workspaceId, data.taskId].map(jobKeySegment).join('--');
+}
+
 export function createRedisConnection(): IORedis {
   return new IORedis(getEnv().REDIS_URL, {
     maxRetriesPerRequest: null,
@@ -39,7 +47,7 @@ export async function enqueueTask(
   options: JobsOptions = {},
 ): Promise<void> {
   await queue.add('execute-task', data, {
-    jobId: `${data.ownerId}:${data.workspaceId}:${data.taskId}`,
+    jobId: defaultTaskJobId(data),
     ...options,
   });
 }
