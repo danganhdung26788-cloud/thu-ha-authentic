@@ -23,7 +23,8 @@ class TaskOnlyScheduleContractTests(unittest.TestCase):
     def test_task_only_runner_cannot_fall_back_to_legacy_brief(self):
         text = (ROOT / "run_task_checklist_digest.ps1").read_text(encoding="utf-8")
         self.assertIn("TASK_ONLY_MODE=true is required", text)
-        self.assertIn("integrations.hermes.task_checklist digest --send", text)
+        self.assertIn("integrations.hermes.task_checklist_ui digest --send", text)
+        self.assertIn("/opt/hermes/.venv/bin/python3", text)
         self.assertNotIn("taskflow_daily_brief.py", text)
         self.assertNotIn("weather", text.lower())
         self.assertNotIn("news", text.lower())

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -75,14 +75,18 @@ class PollingInteractionTests(unittest.IsolatedAsyncioTestCase):
         )
         confirm_data = raw_confirm["inline_keyboard"][0][0]["callback_data"]
         confirm = FakeQuery(confirm_data, query_id="confirm-1")
-        await polling.handle_callback_query(
-            confirm, None, repo=self.repo, store=self.store, moment=self.moment,
-        )
-        writes = self.repo.write_count
-        duplicate = FakeQuery(confirm_data, query_id="confirm-2")
-        await polling.handle_callback_query(
-            duplicate, None, repo=self.repo, store=self.store, moment=self.moment,
-        )
+        with patch(
+            "integrations.hermes.task_checklist.today_vn",
+            return_value=date(2026, 7, 30),
+        ):
+            await polling.handle_callback_query(
+                confirm, None, repo=self.repo, store=self.store, moment=self.moment,
+            )
+            writes = self.repo.write_count
+            duplicate = FakeQuery(confirm_data, query_id="confirm-2")
+            await polling.handle_callback_query(
+                duplicate, None, repo=self.repo, store=self.store, moment=self.moment,
+            )
         self.assertEqual("31/07/2026", self.repo.works[0]["DUE_DATE"])
         self.assertEqual(writes, self.repo.write_count)
         self.assertEqual(1, len(self.repo.actions))
