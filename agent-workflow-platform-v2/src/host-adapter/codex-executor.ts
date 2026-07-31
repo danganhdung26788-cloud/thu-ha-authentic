@@ -73,8 +73,8 @@ export class CodexHostExecutor {
       skipGitRepoCheck: false,
       networkAccessEnabled: this.env.CODEX_NETWORK_ACCESS,
       webSearchMode: 'disabled',
-      model: this.env.CODEX_MODEL,
       modelReasoningEffort: this.env.CODEX_REASONING_EFFORT,
+      ...(this.env.CODEX_MODEL ? { model: this.env.CODEX_MODEL } : {}),
     });
     const controller = new AbortController();
     const timer = setTimeout(
