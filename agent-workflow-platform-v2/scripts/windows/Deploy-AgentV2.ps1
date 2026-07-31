@@ -4,14 +4,17 @@ param(
   [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
 
   [Parameter(Mandatory = $false)]
-  [string]$WorkspaceRoot = 'D:\AI_WORKSPACE\workflow-v2-sandbox',
+  [string]$WorkspaceRoot = '',
 
-  [switch]$SkipCodexLoginCheck
+  [switch]$SkipCodexLoginCheck,
+  [switch]$ConfigureFirewall,
+  [switch]$EnterShadow
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $ProjectRoot = (Resolve-Path $ProjectRoot).Path
+if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { $WorkspaceRoot = $ProjectRoot }
 Set-Location $ProjectRoot
 
 function Assert-Command([string]$Name) {
@@ -50,8 +53,12 @@ if (-not $SkipCodexLoginCheck) {
   Write-Host 'Checking Codex CLI availability...'
   & npx --no-install codex --version
   if ($LASTEXITCODE -ne 0) {
-    throw 'Codex CLI is unavailable. Run npm ci again and complete Codex sign-in before deployment.'
+    throw 'Codex CLI is unavailable. Complete Codex sign-in before deployment.'
   }
+}
+
+if ($ConfigureFirewall) {
+  & (Join-Path $PSScriptRoot 'Register-AgentV2FirewallRules.ps1') -ApproveFirewallChange -Confirm:$false
 }
 
 Write-Host 'Starting isolated V2 control plane...'
@@ -62,5 +69,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Docker Compose deployment failed.' }
 Start-Sleep -Seconds 5
 & (Join-Path $PSScriptRoot 'Test-AgentV2.ps1') -ProjectRoot $ProjectRoot
 
+if ($EnterShadow) {
+  & (Join-Path $PSScriptRoot 'Start-AgentV2Shadow.ps1') -ProjectRoot $ProjectRoot
+}
+
 Write-Host 'Workflow AI V2 deployment completed in isolated mode.'
-Write-Host 'V1 remains unchanged. Cutover state remains V1_ONLY.'
+Write-Host 'V1 remains unchanged. Cutover state remains V1_ONLY unless -EnterShadow was supplied.'
+Write-Host 'Gemini remains disabled and has no API cost.'
