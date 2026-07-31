@@ -26,9 +26,7 @@ export class HttpExecutorAdapter implements ExecutorAdapter {
         request.context.ownerId,
         request.context.workspaceId,
       );
-      if (!allowed) {
-        throw new Error(`Tool grant denied: agent=${agentId}, tool=${toolId}`);
-      }
+      if (!allowed) throw new Error(`Tool grant denied: agent=${agentId}, tool=${toolId}`);
     }
     const response = await fetch(new URL('/v1/execute', this.baseUrl), {
       method: 'POST',
@@ -36,6 +34,7 @@ export class HttpExecutorAdapter implements ExecutorAdapter {
         'content-type': 'application/json',
         ...(this.authToken ? { authorization: `Bearer ${this.authToken}` } : {}),
         'x-correlation-id': request.context.correlationId,
+        'x-idempotency-key': request.context.taskId,
         'x-owner-id': request.context.ownerId,
         'x-workspace-id': request.context.workspaceId,
       },
@@ -49,6 +48,7 @@ export class HttpExecutorAdapter implements ExecutorAdapter {
   async healthCheck(): Promise<boolean> {
     try {
       const response = await fetch(new URL('/health', this.baseUrl), {
+        headers: this.authToken ? { authorization: `Bearer ${this.authToken}` } : {},
         signal: AbortSignal.timeout(5_000),
       });
       return response.ok;
