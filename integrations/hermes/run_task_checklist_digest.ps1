@@ -16,9 +16,13 @@ if ($envText -notmatch "(?im)^TASK_ONLY_MODE=(true|yes|1)\s*$") {
 if (-not (docker ps --filter "name=^/$Container$" --format "{{.ID}}")) {
     throw "Running container not found: $Container"
 }
+
 docker exec `
     -e PYTHONPATH=/opt/data/tha-integrations `
-    $Container python -m integrations.hermes.task_checklist digest --send
+    $Container `
+    /opt/hermes/.venv/bin/python3 `
+    -m integrations.hermes.task_checklist_ui digest --send
+
 if ($LASTEXITCODE -ne 0) {
-    throw "Task-only checklist digest failed"
+    throw "Compact task checklist digest failed"
 }
