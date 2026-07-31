@@ -2,13 +2,17 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { resetEnvForTests } from '../../src/config/env.js';
-import { consumeApprovedAction } from '../../src/control-plane/approval-resume.js';
+import {
+  claimApprovedAction,
+  completeApprovedAction,
+  releaseApprovedAction,
+} from '../../src/control-plane/approval-resume.js';
 import { PostgresControlPlaneStore } from '../../src/control-plane/postgres-store.js';
 import { closePool, getPool } from '../../src/db/pool.js';
 
 const integrationEnabled = process.env.RUN_INTEGRATION === '1';
 
-test('approved action is resumed exactly once', { skip: !integrationEnabled }, async () => {
+test('approved action lease can recover then completes exactly once', { skip: !integrationEnabled }, async () => {
   resetEnvForTests();
   const store = new PostgresControlPlaneStore();
   const suffix = randomUUID();
@@ -57,10 +61,17 @@ test('approved action is resumed exactly once', { skip: !integrationEnabled }, a
       decision: 'APPROVED',
       actor: 'integration-test',
     });
-    const first = await consumeApprovedAction(taskId);
+
+    const first = await claimApprovedAction(taskId, 'EXE-FIRST');
     assert.equal(first?.approvalId, approvalId);
     assert.equal(first?.action.manager.executor, 'HERMES');
-    assert.equal(await consumeApprovedAction(taskId), null);
+    assert.equal(await claimApprovedAction(taskId, 'EXE-SECOND'), null);
+
+    await releaseApprovedAction(approvalId, 'EXE-FIRST');
+    const recovered = await claimApprovedAction(taskId, 'EXE-RECOVERED');
+    assert.equal(recovered?.approvalId, approvalId);
+    await completeApprovedAction(approvalId, 'EXE-RECOVERED');
+    assert.equal(await claimApprovedAction(taskId, 'EXE-AFTER-COMPLETE'), null);
   } finally {
     const pool = getPool();
     await pool.query('DELETE FROM outbox_events WHERE aggregate_id = $1', [taskId]);
