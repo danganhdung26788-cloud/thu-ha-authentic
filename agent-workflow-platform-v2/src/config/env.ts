@@ -5,6 +5,16 @@ const BooleanStringSchema = z
   .default('false')
   .transform((value) => value === 'true');
 
+const OptionalUrlSchema = z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z.string().url().optional(),
+);
+
+const OptionalSecretSchema = z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z.string().min(8).optional(),
+);
+
 export const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3100),
@@ -18,9 +28,10 @@ export const EnvSchema = z.object({
   MINIO_SECRET_KEY: z.string().min(8).default('agent-v2-local-secret'),
   MINIO_BUCKET: z.string().min(3).default('agent-v2-evidence'),
   OPENAI_API_KEY: z.string().optional(),
-  HERMES_ADAPTER_URL: z.string().url().optional(),
-  CODEX_ADAPTER_URL: z.string().url().optional(),
-  CLAUDE_ADAPTER_URL: z.string().url().optional(),
+  HERMES_ADAPTER_URL: OptionalUrlSchema,
+  CODEX_ADAPTER_URL: OptionalUrlSchema,
+  CLAUDE_ADAPTER_URL: OptionalUrlSchema,
+  ADAPTER_AUTH_TOKEN: OptionalSecretSchema,
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(2),
 });
