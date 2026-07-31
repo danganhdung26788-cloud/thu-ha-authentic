@@ -1,4 +1,11 @@
+import { ToolRegistryStore } from '../registry/tool-registry.js';
 import { ExecutorResultSchema, type ExecutorAdapter, type ExecutorRequest, type ExecutorResult } from './contracts.js';
+
+const adapterAgentIds: Record<string, string> = {
+  hermes: 'hermes',
+  codex: 'codex',
+  'claude-review': 'claude-review',
+};
 
 export class HttpExecutorAdapter implements ExecutorAdapter {
   constructor(
@@ -9,6 +16,20 @@ export class HttpExecutorAdapter implements ExecutorAdapter {
   ) {}
 
   async execute(request: ExecutorRequest): Promise<ExecutorResult> {
+    const agentId = adapterAgentIds[this.name];
+    if (!agentId) throw new Error(`Adapter has no registered agent identity: ${this.name}`);
+    const tools = new ToolRegistryStore();
+    for (const toolId of request.requestedTools) {
+      const allowed = await tools.isGranted(
+        agentId,
+        toolId,
+        request.context.ownerId,
+        request.context.workspaceId,
+      );
+      if (!allowed) {
+        throw new Error(`Tool grant denied: agent=${agentId}, tool=${toolId}`);
+      }
+    }
     const response = await fetch(new URL('/v1/execute', this.baseUrl), {
       method: 'POST',
       headers: {
@@ -21,9 +42,7 @@ export class HttpExecutorAdapter implements ExecutorAdapter {
       body: JSON.stringify(request),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
-    if (!response.ok) {
-      throw new Error(`${this.name} adapter HTTP ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`${this.name} adapter HTTP ${response.status}`);
     return ExecutorResultSchema.parse(await response.json());
   }
 
