@@ -28,7 +28,8 @@ export const ExecutorResultSchema = z.object({
   retryable: z.boolean().default(false),
 });
 
-export type ExecutorRequest = z.infer<typeof ExecutorRequestSchema>;
+export type ExecutorRequest = z.input<typeof ExecutorRequestSchema>;
+export type ParsedExecutorRequest = z.output<typeof ExecutorRequestSchema>;
 export type ExecutorResult = z.infer<typeof ExecutorResultSchema>;
 
 export interface ExecutorAdapter {
