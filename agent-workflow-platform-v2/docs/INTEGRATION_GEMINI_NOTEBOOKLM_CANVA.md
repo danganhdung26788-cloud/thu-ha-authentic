@@ -16,7 +16,7 @@ OpenAI Agents SDK remains the central orchestrator. PostgreSQL audit remains aut
 
 ### Runtime
 
-- SDK: `@google/genai` pinned in `package-lock.json`.
+- SDK: `@google/genai` pinned to `2.13.0` in `package-lock.json`.
 - API version default: `v1`.
 - Required external secrets:
   - `GOOGLE_API_KEY`
@@ -121,7 +121,22 @@ Publish or share outside the system
 -> WAITING_APPROVAL
 ```
 
-## 6. Production acceptance
+## 6. Verified code gate
+
+The multi-provider integration passed the complete repository gate on GitHub Actions run `30655132020`:
+
+- locked dependency install;
+- TypeScript strict check;
+- migrations 001–009;
+- unit and integration tests;
+- application build;
+- Docker Compose validation;
+- runtime image build;
+- production dependency audit.
+
+This proves the code contract and container image build. It does not prove live Google/Canva credentials or external adapter execution.
+
+## 7. Production acceptance
 
 No integration is declared live only because its code exists.
 
