@@ -12,7 +12,40 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: agent_v2_test
+          POSTGRES_USER: agent_v2
+          POSTGRES_PASSWORD: integration-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent_v2 -d agent_v2_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://agent_v2:integration-password@localhost:5432/agent_v2_test
+      REDIS_URL: redis://localhost:6379
+      QUEUE_NAME: agent-workflow-v2-ci
+      RUN_INTEGRATION: '1'
+      MINIO_ACCESS_KEY: integration-key
+      MINIO_SECRET_KEY: integration-secret-value
+      POSTGRES_PASSWORD: compose-validation-password
+      OPENAI_AGENTS_DISABLE_TRACING: '1'
     defaults:
       run:
         working-directory: agent-workflow-platform-v2
@@ -24,6 +57,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: agent-workflow-platform-v2/package-lock.json
 
       - name: Use npm 11
         run: npm install --global npm@11
@@ -34,11 +69,20 @@ jobs:
       - name: Type check
         run: npm run check
 
-      - name: Unit tests
+      - name: Apply migrations
+        run: npm run migrate
+
+      - name: Unit and integration tests
         run: npm test
 
       - name: Build
         run: npm run build
+
+      - name: Validate Compose topology
+        run: docker compose -f compose.yml config --quiet
+
+      - name: Build runtime image
+        run: docker build -t agent-workflow-platform-v2:ci .
 
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=high
