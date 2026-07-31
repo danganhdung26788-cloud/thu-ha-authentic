@@ -26,8 +26,8 @@ CREATE TABLE IF NOT EXISTS tool_registry (
 CREATE TABLE IF NOT EXISTS agent_tool_grants (
   agent_id text NOT NULL REFERENCES agent_registry(agent_id) ON DELETE CASCADE,
   tool_id text NOT NULL REFERENCES tool_registry(tool_id) ON DELETE CASCADE,
-  owner_scope text,
-  workspace_scope text,
+  owner_scope text NOT NULL DEFAULT '*',
+  workspace_scope text NOT NULL DEFAULT '*',
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY(agent_id, tool_id, owner_scope, workspace_scope)
 );
