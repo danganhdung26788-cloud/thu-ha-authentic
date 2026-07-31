@@ -1,12 +1,8 @@
 import { Agent } from '@openai/agents';
 import { ManagerDecisionSchema } from '../contracts/execution-context.js';
 
-export function createManagerAgent() {
-  const model = process.env.OPENAI_MANAGER_MODEL?.trim();
-  if (!model) {
-    throw new Error('OPENAI_MANAGER_MODEL is required.');
-  }
-
+export function createManagerAgent(model: string) {
+  if (!model.trim()) throw new Error('Manager model is required.');
   return new Agent({
     name: 'Workflow V2 Manager',
     model,
