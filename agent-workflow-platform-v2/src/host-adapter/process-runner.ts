@@ -14,14 +14,17 @@ export type ProcessRunResult = Readonly<{
 }>;
 
 function appendBounded(
-  current: Buffer,
-  chunk: Buffer,
+  current: Uint8Array,
+  chunk: Uint8Array,
   maxBytes: number,
-): { value: Buffer; truncated: boolean } {
+): { value: Uint8Array; truncated: boolean } {
   if (current.length >= maxBytes) return { value: current, truncated: true };
   const remaining = maxBytes - current.length;
-  if (chunk.length <= remaining) return { value: Buffer.concat([current, chunk]), truncated: false };
-  return { value: Buffer.concat([current, chunk.subarray(0, remaining)]), truncated: true };
+  const accepted = chunk.length <= remaining ? chunk : chunk.subarray(0, remaining);
+  const value = new Uint8Array(current.length + accepted.length);
+  value.set(current, 0);
+  value.set(accepted, current.length);
+  return { value, truncated: chunk.length > remaining };
 }
 
 export async function runProcess(input: {
@@ -42,8 +45,8 @@ export async function runProcess(input: {
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    let stdout = Buffer.alloc(0);
-    let stderr = Buffer.alloc(0);
+    let stdout: Uint8Array = new Uint8Array(0);
+    let stderr: Uint8Array = new Uint8Array(0);
     let truncated = false;
     let timedOut = false;
 
@@ -75,8 +78,8 @@ export async function runProcess(input: {
         exitCode,
         signal,
         timedOut,
-        stdout: stdout.toString('utf8'),
-        stderr: stderr.toString('utf8'),
+        stdout: Buffer.from(stdout).toString('utf8'),
+        stderr: Buffer.from(stderr).toString('utf8'),
         truncated,
         durationMs: Date.now() - startedAt,
       });
