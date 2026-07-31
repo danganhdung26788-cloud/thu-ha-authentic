@@ -1,6 +1,6 @@
 import { BadRequestException, Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { ZodError } from 'zod';
-import { CutoverStore } from '../../cutover/cutover-store.js';
+import { CutoverStore, CutoverTransitionSchema } from '../../cutover/cutover-store.js';
 import { ShadowRunStore } from '../../cutover/shadow-store.js';
 import { ApiTokenGuard } from './api-token.guard.js';
 
@@ -18,7 +18,7 @@ export class CutoverController {
   @Post('/transition')
   async transition(@Body() body: unknown) {
     try {
-      return await this.#cutover.transition(body as never);
+      return await this.#cutover.transition(CutoverTransitionSchema.parse(body));
     } catch (error) {
       if (error instanceof ZodError) {
         throw new BadRequestException({ message: 'Invalid cutover transition.', issues: error.issues });
