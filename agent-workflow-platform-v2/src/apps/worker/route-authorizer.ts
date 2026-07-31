@@ -12,8 +12,19 @@ import {
 import { authorizeManagerTools, type RoutingAuthorization } from '../../registry/routing-authorization.js';
 import { runManagerDecision } from '../../runtime/run-manager.js';
 
+const TOOL_CALLS_MARKER = '\n\n<workflow-v2-tool-calls>';
+const TOOL_CALLS_END = '</workflow-v2-tool-calls>';
+
 function booleanPayload(payload: Record<string, unknown>, key: string): boolean {
   return payload[key] === true;
+}
+
+function preserveToolCalls(manager: ManagerDecision): ManagerDecision {
+  if (!manager.toolCalls?.length || manager.nextAction.includes(TOOL_CALLS_MARKER)) return manager;
+  return {
+    ...manager,
+    nextAction: `${manager.nextAction}${TOOL_CALLS_MARKER}${JSON.stringify(manager.toolCalls)}${TOOL_CALLS_END}`,
+  };
 }
 
 export type AuthorizedRoute = Readonly<{
@@ -30,8 +41,9 @@ export async function resolveAuthorizedRoute(
   executionId: string,
 ): Promise<AuthorizedRoute> {
   const approvalLease = await claimApprovedAction(task.taskId, executionId);
-  const manager = approvalLease?.action.manager
-    ?? await runManagerDecision(context, task.objective);
+  const manager = preserveToolCalls(
+    approvalLease?.action.manager ?? await runManagerDecision(context, task.objective),
+  );
   const authorization = await authorizeManagerTools(context, manager);
 
   if (approvalLease) {
