@@ -1,5 +1,5 @@
 import { Queue, Worker, type JobsOptions, type Processor } from 'bullmq';
-import IORedis from 'ioredis';
+import { Redis } from 'ioredis';
 import { getEnv } from '../config/env.js';
 
 export type TaskJobData = Readonly<{
@@ -22,8 +22,8 @@ export function defaultTaskJobId(data: TaskJobData): string {
   return [data.ownerId, data.workspaceId, data.taskId].map(jobKeySegment).join('--');
 }
 
-export function createRedisConnection(): IORedis {
-  return new IORedis(getEnv().REDIS_URL, {
+export function createRedisConnection(): Redis {
+  return new Redis(getEnv().REDIS_URL, {
     maxRetriesPerRequest: null,
     enableReadyCheck: true,
     lazyConnect: false,
