@@ -17,6 +17,10 @@ export const ExecutorSchema = z.enum([
   'SPECIALIST_AGENT',
 ]);
 
+export type AutonomyMode = z.infer<typeof AutonomyModeSchema>;
+export type RiskLevel = z.infer<typeof RiskLevelSchema>;
+export type Executor = z.infer<typeof ExecutorSchema>;
+
 export const ExecutionContextSchema = z.object({
   taskId: z.string().min(1),
   correlationId: z.string().min(1),
