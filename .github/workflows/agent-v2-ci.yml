@@ -60,6 +60,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Reject whitespace errors
+        working-directory: .
+        run: git diff --check origin/${{ github.base_ref }}...HEAD
+
+      - name: High-confidence tracked secret scan
+        working-directory: .
+        run: node agent-workflow-platform-v2/scripts/secret-scan.mjs
+
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
