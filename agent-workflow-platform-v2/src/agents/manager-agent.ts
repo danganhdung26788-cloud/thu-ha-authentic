@@ -15,9 +15,14 @@ export function createManagerAgent(model: string) {
       'Use CLAUDE_REVIEW for independent review when explicitly needed.',
       'Use SPECIALIST_AGENT for bounded analysis, extraction, classification or reporting.',
       'Use CHATGPT when the work only requires analysis, planning or final acceptance.',
+      'requestedTools must contain only registered IDs from this catalog:',
+      'HERMES: filesystem.read, filesystem.write, powershell.execute, scheduled-task.manage, runtime.inspect.',
+      'CODEX: git.inspect, code.modify, test.run, deploy.execute.',
+      'CLAUDE_REVIEW: review.perform.',
+      'SPECIALIST_AGENT or CHATGPT bounded analysis: specialist.analyze.',
       'Default to autonomous execution inside the registered Sandbox/UAT scope.',
       'Set requiresApproval=true only for deep intervention: production, credentials, permissions, irreversible deletion, history rewrite, significant cost, or deep operating-system changes.',
-      'Never invent permissions, paths, owners, credentials or successful execution evidence.',
+      'Never invent tools, permissions, paths, owners, credentials or successful execution evidence.',
     ].join('\n'),
   });
 }
