@@ -1,0 +1,126 @@
+name: agent-workflow-platform-v2
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: agent_v2
+      POSTGRES_USER: agent_v2
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent_v2 -d agent_v2"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [control]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [control]
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [control]
+
+  migrate:
+    build: .
+    command: ["node", "dist/src/db/migrate.js"]
+    restart: "no"
+    environment: &platform-env
+      NODE_ENV: production
+      DATABASE_URL: postgresql://agent_v2:${POSTGRES_PASSWORD}@postgres:5432/agent_v2
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_BUCKET: ${MINIO_BUCKET:-agent-v2-evidence}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MANAGER_MODEL: ${OPENAI_MANAGER_MODEL:-}
+      OPENAI_SPECIALIST_MODEL: ${OPENAI_SPECIALIST_MODEL:-}
+      OPENAI_AGENTS_DISABLE_TRACING: ${OPENAI_AGENTS_DISABLE_TRACING:-1}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-}
+      GEMINI_API_VERSION: ${GEMINI_API_VERSION:-v1}
+      NOTEBOOKLM_SOURCE_PACKAGE_ONLY: ${NOTEBOOKLM_SOURCE_PACKAGE_ONLY:-true}
+      CANVA_ADAPTER_URL: ${CANVA_ADAPTER_URL:-}
+      CANVA_ACCESS_TOKEN: ${CANVA_ACCESS_TOKEN:-}
+      API_AUTH_TOKEN: ${API_AUTH_TOKEN:?API_AUTH_TOKEN is required}
+      HERMES_ADAPTER_URL: ${HERMES_ADAPTER_URL:-}
+      CODEX_ADAPTER_URL: ${CODEX_ADAPTER_URL:-}
+      CLAUDE_ADAPTER_URL: ${CLAUDE_ADAPTER_URL:-}
+      ADAPTER_AUTH_TOKEN: ${ADAPTER_AUTH_TOKEN:?ADAPTER_AUTH_TOKEN is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [control]
+
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      <<: *platform-env
+      PORT: 3100
+    ports:
+      - "127.0.0.1:${AGENT_V2_API_PORT:-3100}:3100"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3100/ready').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks: [control]
+
+  worker:
+    build: .
+    command: ["node", "dist/src/apps/worker/main.js"]
+    restart: unless-stopped
+    environment: *platform-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks: [control]
+
+networks:
+  control:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
