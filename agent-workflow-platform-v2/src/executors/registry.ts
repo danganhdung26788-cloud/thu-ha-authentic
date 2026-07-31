@@ -7,9 +7,7 @@ export class ExecutorRegistry {
   readonly #adapters = new Map<string, ExecutorAdapter>();
 
   register(executor: Executor, adapter: ExecutorAdapter): void {
-    if (this.#adapters.has(executor)) {
-      throw new Error(`Executor already registered: ${executor}`);
-    }
+    if (this.#adapters.has(executor)) throw new Error(`Executor already registered: ${executor}`);
     this.#adapters.set(executor, adapter);
   }
 
@@ -27,15 +25,14 @@ export class ExecutorRegistry {
 export function createExecutorRegistry(): ExecutorRegistry {
   const env = getEnv();
   const registry = new ExecutorRegistry();
-  const token = process.env.ADAPTER_AUTH_TOKEN;
   if (env.HERMES_ADAPTER_URL) {
-    registry.register('HERMES', new HttpExecutorAdapter('hermes', env.HERMES_ADAPTER_URL, token));
+    registry.register('HERMES', new HttpExecutorAdapter('hermes', env.HERMES_ADAPTER_URL, env.ADAPTER_AUTH_TOKEN));
   }
   if (env.CODEX_ADAPTER_URL) {
-    registry.register('CODEX', new HttpExecutorAdapter('codex', env.CODEX_ADAPTER_URL, token));
+    registry.register('CODEX', new HttpExecutorAdapter('codex', env.CODEX_ADAPTER_URL, env.ADAPTER_AUTH_TOKEN));
   }
   if (env.CLAUDE_ADAPTER_URL) {
-    registry.register('CLAUDE_REVIEW', new HttpExecutorAdapter('claude-review', env.CLAUDE_ADAPTER_URL, token));
+    registry.register('CLAUDE_REVIEW', new HttpExecutorAdapter('claude-review', env.CLAUDE_ADAPTER_URL, env.ADAPTER_AUTH_TOKEN));
   }
   return registry;
 }
