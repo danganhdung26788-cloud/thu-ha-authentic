@@ -28,6 +28,7 @@ export const EnvSchema = z.object({
   MINIO_SECRET_KEY: z.string().min(8).default('agent-v2-local-secret'),
   MINIO_BUCKET: z.string().min(3).default('agent-v2-evidence'),
   OPENAI_API_KEY: z.string().optional(),
+  API_AUTH_TOKEN: OptionalSecretSchema,
   HERMES_ADAPTER_URL: OptionalUrlSchema,
   CODEX_ADAPTER_URL: OptionalUrlSchema,
   CLAUDE_ADAPTER_URL: OptionalUrlSchema,
