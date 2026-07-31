@@ -27,12 +27,16 @@ export class ControlPlanePump {
         logger.error({ outboxId: event.outboxId, aggregateId: event.aggregateId }, 'Outbox task missing');
         continue;
       }
-      await enqueueTask(this.#queue, {
-        taskId: task.taskId,
-        correlationId: task.correlationId,
-        ownerId: task.ownerId,
-        workspaceId: task.workspaceId,
-      });
+      await enqueueTask(
+        this.#queue,
+        {
+          taskId: task.taskId,
+          correlationId: task.correlationId,
+          ownerId: task.ownerId,
+          workspaceId: task.workspaceId,
+        },
+        { jobId: `outbox-${event.outboxId}-${task.taskId}` },
+      );
       await this.#store.markOutboxPublished(event.outboxId);
     }
   }
