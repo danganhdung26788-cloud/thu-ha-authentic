@@ -15,7 +15,7 @@ export const ActionRequestSchema = z.object({
   estimatedCostUsd: z.number().nonnegative().default(0),
 });
 
-export type ActionRequest = z.infer<typeof ActionRequestSchema>;
+export type ActionRequest = z.input<typeof ActionRequestSchema>;
 
 export type PolicyDecision = Readonly<{
   outcome: 'AUTO_APPROVE' | 'REQUIRE_APPROVAL' | 'DENY';
