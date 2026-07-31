@@ -1,8 +1,17 @@
+import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import { CreateTaskSchema, TaskRecordSchema, type CreateTaskInput, type TaskRecord, type TaskStatus } from '../domain/task.js';
 import type { ExecutionRecord, ExecutionStatus } from '../domain/execution.js';
 import { getPool, withTransaction } from '../db/pool.js';
-import type { ApprovalInput, AuditEventInput, ControlPlaneStore, EvidenceInput } from './store.js';
+import type {
+  ApprovalDecisionInput,
+  ApprovalDecisionResult,
+  ApprovalInput,
+  AuditEventInput,
+  ControlPlaneStore,
+  EvidenceInput,
+  OutboxEvent,
+} from './store.js';
 
 type TaskRow = Readonly<{
   task_id: string;
@@ -23,6 +32,14 @@ type TaskRow = Readonly<{
   last_error: string | null;
   created_at: Date;
   updated_at: Date;
+}>;
+
+type OutboxRow = Readonly<{
+  outbox_id: number;
+  event_type: string;
+  aggregate_id: string;
+  payload: Record<string, unknown>;
+  attempts: number;
 }>;
 
 function mapTask(row: TaskRow): TaskRecord {
@@ -48,6 +65,16 @@ function mapTask(row: TaskRow): TaskRecord {
   });
 }
 
+function mapOutbox(row: OutboxRow): OutboxEvent {
+  return {
+    outboxId: row.outbox_id,
+    eventType: row.event_type,
+    aggregateId: row.aggregate_id,
+    payload: row.payload,
+    attempts: row.attempts,
+  };
+}
+
 async function selectTask(client: pg.PoolClient, taskId: string): Promise<TaskRecord> {
   const selected = await client.query<TaskRow>('SELECT * FROM tasks WHERE task_id = $1', [taskId]);
   const row = selected.rows[0];
@@ -56,6 +83,8 @@ async function selectTask(client: pg.PoolClient, taskId: string): Promise<TaskRe
 }
 
 export class PostgresControlPlaneStore implements ControlPlaneStore {
+  readonly #instanceId = `STORE-${randomUUID()}`;
+
   async createTask(rawInput: CreateTaskInput): Promise<{ task: TaskRecord; created: boolean }> {
     const input = CreateTaskSchema.parse(rawInput);
     return withTransaction(async (client) => {
@@ -145,6 +174,51 @@ export class PostgresControlPlaneStore implements ControlPlaneStore {
     );
   }
 
+  async decideApproval(input: ApprovalDecisionInput): Promise<ApprovalDecisionResult> {
+    return withTransaction(async (client) => {
+      const selected = await client.query<{
+        approval_id: string;
+        task_id: string;
+        owner_id: string;
+        workspace_id: string;
+        status: string;
+      }>(
+        `SELECT approval_id, task_id, owner_id, workspace_id, status
+         FROM approvals WHERE approval_id = $1 FOR UPDATE`,
+        [input.approvalId],
+      );
+      const approval = selected.rows[0];
+      if (!approval) throw new Error(`Approval not found: ${input.approvalId}`);
+      if (approval.status !== 'PENDING') throw new Error(`Approval already decided: ${input.approvalId}`);
+      await client.query(
+        `UPDATE approvals SET status = $2, decided_at = now(), decided_by = $3, reason = $4
+         WHERE approval_id = $1`,
+        [input.approvalId, input.decision, input.actor, input.reason ?? null],
+      );
+      const nextStatus = input.decision === 'APPROVED' ? 'QUEUED' : 'FAILED';
+      await client.query(
+        `UPDATE tasks SET status = $2, next_run_at = NULL,
+          last_error = CASE WHEN $2 = 'FAILED' THEN 'APPROVAL_REJECTED' ELSE NULL END,
+          updated_at = now() WHERE task_id = $1`,
+        [approval.task_id, nextStatus],
+      );
+      if (input.decision === 'APPROVED') {
+        await client.query(
+          `INSERT INTO outbox_events(event_type, aggregate_id, payload)
+           VALUES('TASK_APPROVED', $1, $2::jsonb)`,
+          [approval.task_id, JSON.stringify({ taskId: approval.task_id, approvalId: input.approvalId })],
+        );
+      }
+      return {
+        approvalId: approval.approval_id,
+        taskId: approval.task_id,
+        ownerId: approval.owner_id,
+        workspaceId: approval.workspace_id,
+        decision: input.decision,
+      };
+    });
+  }
+
   async recordEvidence(input: EvidenceInput): Promise<void> {
     await getPool().query(
       `INSERT INTO evidence_objects(evidence_id, task_id, execution_id, owner_id, workspace_id,
@@ -166,6 +240,50 @@ export class PostgresControlPlaneStore implements ControlPlaneStore {
         event.ownerId, event.workspaceId, event.eventType, event.actor,
         JSON.stringify(event.details ?? {})],
     );
+  }
+
+  async claimOutbox(limit = 50): Promise<OutboxEvent[]> {
+    return withTransaction(async (client) => {
+      const result = await client.query<OutboxRow>(
+        `WITH picked AS (
+          SELECT outbox_id FROM outbox_events
+          WHERE published_at IS NULL
+            AND (locked_at IS NULL OR locked_at < now() - interval '2 minutes')
+          ORDER BY outbox_id
+          FOR UPDATE SKIP LOCKED
+          LIMIT $1
+        )
+        UPDATE outbox_events AS outbox
+        SET locked_at = now(), locked_by = $2, attempts = outbox.attempts + 1
+        FROM picked
+        WHERE outbox.outbox_id = picked.outbox_id
+        RETURNING outbox.outbox_id, outbox.event_type, outbox.aggregate_id,
+          outbox.payload, outbox.attempts`,
+        [limit, this.#instanceId],
+      );
+      return result.rows.map(mapOutbox);
+    });
+  }
+
+  async markOutboxPublished(outboxId: number): Promise<void> {
+    const result = await getPool().query(
+      `UPDATE outbox_events SET published_at = now(), locked_at = NULL, locked_by = NULL
+       WHERE outbox_id = $1 AND locked_by = $2 AND published_at IS NULL`,
+      [outboxId, this.#instanceId],
+    );
+    if (result.rowCount !== 1) throw new Error(`Outbox lease lost: ${outboxId}`);
+  }
+
+  async listRecoverableTasks(staleBefore: Date, limit = 100): Promise<TaskRecord[]> {
+    const result = await getPool().query<TaskRow>(
+      `SELECT * FROM tasks
+       WHERE (status = 'RETRY_WAIT' AND next_run_at <= now())
+          OR (status = 'RUNNING' AND updated_at < $1)
+       ORDER BY updated_at
+       LIMIT $2`,
+      [staleBefore, limit],
+    );
+    return result.rows.map(mapTask);
   }
 
   async healthCheck(): Promise<boolean> {
