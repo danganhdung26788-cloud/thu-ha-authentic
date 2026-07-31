@@ -4,7 +4,7 @@ param(
   [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
 
   [Parameter(Mandatory = $false)]
-  [string]$WorkspaceRoot = 'D:\AI_WORKSPACE\workflow-v2-sandbox'
+  [string]$WorkspaceRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,6 +25,8 @@ function Set-EnvValue([string]$Content, [string]$Name, [string]$Value) {
 }
 
 $ProjectRoot = (Resolve-Path $ProjectRoot).Path
+if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { $WorkspaceRoot = $ProjectRoot }
+$WorkspaceRoot = [System.IO.Path]::GetFullPath($WorkspaceRoot)
 $envTemplate = Join-Path $ProjectRoot '.env.example'
 $envFile = Join-Path $ProjectRoot '.env'
 $runtimeDir = Join-Path $ProjectRoot 'runtime'
