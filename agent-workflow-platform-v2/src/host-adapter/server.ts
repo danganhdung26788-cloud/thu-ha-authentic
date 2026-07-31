@@ -77,7 +77,9 @@ export async function buildHostAdapterServer(env: HostAdapterEnv) {
         execution = executor.execute(body)
           .then((result) => ExecutorResultSchema.parse(result))
           .then(async (result) => {
-            await receipts.write(body.context.ownerId, body.context.workspaceId, body.context.taskId, result);
+            if (!result.retryable) {
+              await receipts.write(body.context.ownerId, body.context.workspaceId, body.context.taskId, result);
+            }
             return result;
           })
           .finally(() => inFlight.delete(key));
