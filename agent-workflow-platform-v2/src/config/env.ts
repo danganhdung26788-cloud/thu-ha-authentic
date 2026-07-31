@@ -15,6 +15,11 @@ const OptionalSecretSchema = z.preprocess(
   z.string().min(8).optional(),
 );
 
+const OptionalStringSchema = z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z.string().min(1).optional(),
+);
+
 export const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3100),
@@ -28,6 +33,12 @@ export const EnvSchema = z.object({
   MINIO_SECRET_KEY: z.string().min(8).default('agent-v2-local-secret'),
   MINIO_BUCKET: z.string().min(3).default('agent-v2-evidence'),
   OPENAI_API_KEY: z.string().optional(),
+  GOOGLE_API_KEY: OptionalSecretSchema,
+  GEMINI_MODEL: OptionalStringSchema,
+  GEMINI_API_VERSION: z.enum(['v1', 'v1beta']).default('v1'),
+  NOTEBOOKLM_SOURCE_PACKAGE_ONLY: BooleanStringSchema.default('true'),
+  CANVA_ADAPTER_URL: OptionalUrlSchema,
+  CANVA_ACCESS_TOKEN: OptionalSecretSchema,
   API_AUTH_TOKEN: OptionalSecretSchema,
   HERMES_ADAPTER_URL: OptionalUrlSchema,
   CODEX_ADAPTER_URL: OptionalUrlSchema,
