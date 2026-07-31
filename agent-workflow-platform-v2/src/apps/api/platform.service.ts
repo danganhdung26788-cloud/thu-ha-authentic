@@ -3,6 +3,7 @@ import { Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { z } from 'zod';
 import { PostgresControlPlaneStore } from '../../control-plane/postgres-store.js';
 import { MinioEvidenceStore } from '../../evidence/minio-evidence-store.js';
+import { createExecutorRegistry } from '../../executors/registry.js';
 import { createTaskQueue } from '../../queue/task-queue.js';
 
 const SubmitTaskSchema = z.object({
@@ -87,7 +88,11 @@ export class PlatformService implements OnApplicationShutdown {
     const db = await this.#store.healthCheck().catch(() => false);
     const redis = await this.#queue.getJobCounts().then(() => true).catch(() => false);
     const evidence = await this.#evidence.healthCheck().catch(() => false);
-    return { db, redis, evidence, ready: db && redis && evidence };
+    const adapterChecks = await Promise.all(
+      createExecutorRegistry().entries().map(([, adapter]) => adapter.healthCheck()),
+    );
+    const adapters = adapterChecks.every(Boolean);
+    return { db, redis, evidence, adapters, ready: db && redis && evidence && adapters };
   }
 
   async onApplicationShutdown(): Promise<void> {
