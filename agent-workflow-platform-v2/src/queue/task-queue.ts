@@ -1,5 +1,10 @@
-import { Queue, Worker, type JobsOptions, type Processor } from 'bullmq';
-import { Redis } from 'ioredis';
+import {
+  Queue,
+  Worker,
+  type ConnectionOptions,
+  type JobsOptions,
+  type Processor,
+} from 'bullmq';
 import { getEnv } from '../config/env.js';
 
 export type TaskJobData = Readonly<{
@@ -22,15 +27,32 @@ export function defaultTaskJobId(data: TaskJobData): string {
   return [data.ownerId, data.workspaceId, data.taskId].map(jobKeySegment).join('--');
 }
 
-export function createRedisConnection(): Redis {
-  return new Redis(getEnv().REDIS_URL, {
+export function redisConnectionOptions(): ConnectionOptions {
+  const url = new URL(getEnv().REDIS_URL);
+  if (!['redis:', 'rediss:'].includes(url.protocol)) {
+    throw new Error(`Unsupported Redis protocol: ${url.protocol}`);
+  }
+  const database = url.pathname && url.pathname !== '/'
+    ? Number.parseInt(url.pathname.slice(1), 10)
+    : 0;
+  if (!Number.isInteger(database) || database < 0) {
+    throw new Error(`Invalid Redis database index: ${url.pathname}`);
+  }
+  return {
+    host: url.hostname,
+    port: Number.parseInt(url.port || '6379', 10),
+    db: database,
     maxRetriesPerRequest: null,
     enableReadyCheck: true,
-    lazyConnect: false,
-  });
+    ...(url.username ? { username: decodeURIComponent(url.username) } : {}),
+    ...(url.password ? { password: decodeURIComponent(url.password) } : {}),
+    ...(url.protocol === 'rediss:' ? { tls: {} } : {}),
+  };
 }
 
-export function createTaskQueue(connection = createRedisConnection()): Queue<TaskJobData, TaskJobResult> {
+export function createTaskQueue(
+  connection: ConnectionOptions = redisConnectionOptions(),
+): Queue<TaskJobData, TaskJobResult> {
   return new Queue<TaskJobData, TaskJobResult>(getEnv().QUEUE_NAME, {
     connection,
     defaultJobOptions: {
@@ -53,7 +75,7 @@ export async function enqueueTask(
 
 export function createTaskWorker(
   processor: Processor<TaskJobData, TaskJobResult>,
-  connection = createRedisConnection(),
+  connection: ConnectionOptions = redisConnectionOptions(),
 ): Worker<TaskJobData, TaskJobResult> {
   return new Worker<TaskJobData, TaskJobResult>(getEnv().QUEUE_NAME, processor, {
     connection,
