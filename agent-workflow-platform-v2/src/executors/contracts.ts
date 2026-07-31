@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { ExecutionContextSchema, ExecutorSchema } from '../contracts/execution-context.js';
+import {
+  ExecutionContextSchema,
+  ExecutorSchema,
+  PlannedToolCallSchema,
+} from '../contracts/execution-context.js';
 
 export const ExecutorRequestSchema = z.object({
   context: ExecutionContextSchema,
@@ -7,6 +11,7 @@ export const ExecutorRequestSchema = z.object({
   objective: z.string().min(1),
   instructions: z.string().min(1),
   requestedTools: z.array(z.string().min(1)),
+  toolCalls: z.array(PlannedToolCallSchema).default([]),
   callbackUrl: z.string().url().optional(),
 });
 
