@@ -13,7 +13,6 @@ from datetime import date
 from typing import Any, Mapping, Sequence
 
 from integrations.hermes.task_checklist import (
-    CONTINUE_MARKER,
     TERMINAL_SUBTASK_STATUSES,
     SheetsTaskRepository,
     TaskRepository,
@@ -48,6 +47,17 @@ def _truncate_words(value: Any, limit: int) -> str:
     cut = text[: max(1, limit - 1)].rstrip()
     if " " in cut:
         cut = cut.rsplit(" ", 1)[0].rstrip()
+    return f"{cut}…"
+
+
+def _truncate_card(lines: Sequence[str], limit: int = MAX_CARD_LENGTH) -> str:
+    text = "\n".join(line.rstrip() for line in lines if line is not None).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[: max(1, limit - 1)].rstrip()
+    boundary = max(cut.rfind("\n"), cut.rfind(" "))
+    if boundary > 0:
+        cut = cut[:boundary].rstrip()
     return f"{cut}…"
 
 
@@ -113,7 +123,7 @@ def _format_parent_card(
         remaining = len(children) - MAX_CHILDREN_PREVIEW
         if remaining > 0:
             lines.append(f"  … còn {remaining} việc con")
-    return _truncate_words("\n".join(lines), MAX_CARD_LENGTH)
+    return _truncate_card(lines)
 
 
 def _format_standalone_child_card(
@@ -137,7 +147,7 @@ def _format_standalone_child_card(
     if parent_id:
         parent = f"{parent_id} — {_truncate_words(parent_title, 92)}" if parent_title else parent_id
         lines.append(f"Thuộc nhiệm vụ: {parent}")
-    return _truncate_words("\n".join(lines), MAX_CARD_LENGTH)
+    return _truncate_card(lines)
 
 
 def _visible_records(digest: Any) -> tuple[dict[str, list[Mapping[str, str]]], set[str]]:
@@ -200,7 +210,7 @@ def send_checklist_digest(
     work_items = repo.read_work_items()
     subtasks = repo.read_subtasks()
     digest = build_digest(work_items, subtasks, today=effective_today)
-    visible, parent_ids = _visible_records(digest)
+    visible, _ = _visible_records(digest)
     total_cards = sum(len(records) for records in visible.values())
     if total_cards == 0:
         return 0
