@@ -21,6 +21,21 @@ export type ApprovalInput = Readonly<{
   action: Record<string, unknown>;
 }>;
 
+export type ApprovalDecisionInput = Readonly<{
+  approvalId: string;
+  decision: 'APPROVED' | 'REJECTED';
+  actor: string;
+  reason?: string;
+}>;
+
+export type ApprovalDecisionResult = Readonly<{
+  approvalId: string;
+  taskId: string;
+  ownerId: string;
+  workspaceId: string;
+  decision: 'APPROVED' | 'REJECTED';
+}>;
+
 export type EvidenceInput = Readonly<{
   evidenceId: string;
   taskId: string;
@@ -31,6 +46,14 @@ export type EvidenceInput = Readonly<{
   sha256: string;
   mediaType: string;
   sizeBytes: number;
+}>;
+
+export type OutboxEvent = Readonly<{
+  outboxId: number;
+  eventType: string;
+  aggregateId: string;
+  payload: Record<string, unknown>;
+  attempts: number;
 }>;
 
 export interface ControlPlaneStore {
@@ -53,7 +76,11 @@ export interface ControlPlaneStore {
     error?: string | null,
   ): Promise<void>;
   createApproval(input: ApprovalInput): Promise<void>;
+  decideApproval(input: ApprovalDecisionInput): Promise<ApprovalDecisionResult>;
   recordEvidence(input: EvidenceInput): Promise<void>;
   appendAudit(event: AuditEventInput): Promise<void>;
+  claimOutbox(limit?: number): Promise<OutboxEvent[]>;
+  markOutboxPublished(outboxId: number): Promise<void>;
+  listRecoverableTasks(staleBefore: Date, limit?: number): Promise<TaskRecord[]>;
   healthCheck(): Promise<boolean>;
 }
