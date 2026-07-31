@@ -6,6 +6,7 @@ param(
   [Parameter(Mandatory = $false)]
   [string]$WorkspaceRoot = '',
 
+  [switch]$InfrastructureOnly,
   [switch]$SkipCodexLoginCheck,
   [switch]$ConfigureFirewall,
   [switch]$EnterShadow
@@ -23,6 +24,19 @@ function Assert-Command([string]$Name) {
   }
 }
 
+function Read-EnvValues([string]$Path) {
+  $values = @{}
+  Get-Content -Path $Path | ForEach-Object {
+    $line = $_.Trim()
+    if (-not $line -or $line.StartsWith('#')) { return }
+    $separator = $line.IndexOf('=')
+    if ($separator -gt 0) {
+      $values[$line.Substring(0, $separator)] = $line.Substring($separator + 1)
+    }
+  }
+  return $values
+}
+
 Assert-Command 'node'
 Assert-Command 'npm'
 Assert-Command 'docker'
@@ -33,8 +47,21 @@ if ($nodeMajor -lt 22) { throw "Node.js 22+ is required. Current: $(& node --ver
 & docker info *> $null
 if ($LASTEXITCODE -ne 0) { throw 'Docker Desktop engine is not running.' }
 
-if (-not (Test-Path (Join-Path $ProjectRoot '.env'))) {
+$envPath = Join-Path $ProjectRoot '.env'
+if (-not (Test-Path $envPath)) {
   & (Join-Path $PSScriptRoot 'New-AgentV2Configuration.ps1') -ProjectRoot $ProjectRoot -WorkspaceRoot $WorkspaceRoot
+}
+$envValues = Read-EnvValues $envPath
+
+if ($InfrastructureOnly -and $EnterShadow) {
+  throw '-EnterShadow is not allowed with -InfrastructureOnly.'
+}
+if (-not $InfrastructureOnly) {
+  foreach ($required in @('OPENAI_API_KEY', 'OPENAI_MANAGER_MODEL', 'OPENAI_SPECIALIST_MODEL')) {
+    if (-not $envValues[$required]) {
+      throw "$required is empty. Configure approved OpenAI credentials/models or use -InfrastructureOnly."
+    }
+  }
 }
 
 Write-Host 'Installing locked dependencies...'
@@ -73,6 +100,10 @@ if ($EnterShadow) {
   & (Join-Path $PSScriptRoot 'Start-AgentV2Shadow.ps1') -ProjectRoot $ProjectRoot
 }
 
-Write-Host 'Workflow AI V2 deployment completed in isolated mode.'
+if ($InfrastructureOnly) {
+  Write-Host 'Workflow AI V2 infrastructure deployment PASS; AI task execution remains intentionally inactive.'
+} else {
+  Write-Host 'Workflow AI V2 isolated runtime deployment PASS.'
+}
 Write-Host 'V1 remains unchanged. Cutover state remains V1_ONLY unless -EnterShadow was supplied.'
 Write-Host 'Gemini remains disabled and has no API cost.'
