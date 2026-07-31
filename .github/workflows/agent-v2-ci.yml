@@ -1,0 +1,44 @@
+name: Agent Workflow V2 CI
+
+on:
+  pull_request:
+    paths:
+      - 'agent-workflow-platform-v2/**'
+      - '.github/workflows/agent-v2-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent-workflow-platform-v2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Use npm 11
+        run: npm install --global npm@11
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Type check
+        run: npm run check
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
