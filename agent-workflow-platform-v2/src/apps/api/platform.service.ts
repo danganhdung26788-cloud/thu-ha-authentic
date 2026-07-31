@@ -75,7 +75,12 @@ export class PlatformService implements OnApplicationShutdown {
 
   async decideApproval(approvalId: string, input: unknown): Promise<Record<string, unknown>> {
     const parsed = ApprovalDecisionSchema.parse(input);
-    const decision = await this.#store.decideApproval({ approvalId, ...parsed });
+    const decision = await this.#store.decideApproval({
+      approvalId,
+      decision: parsed.decision,
+      actor: parsed.actor,
+      ...(parsed.reason ? { reason: parsed.reason } : {}),
+    });
     const task = await this.#store.getTask(decision.taskId);
     if (!task) throw new Error(`Task missing after approval decision: ${decision.taskId}`);
     await this.#store.appendAudit({
@@ -97,7 +102,7 @@ export class PlatformService implements OnApplicationShutdown {
 
   async readiness(): Promise<Record<string, boolean>> {
     const db = await this.#store.healthCheck().catch(() => false);
-    const redis = await this.#queue.client.then((client) => client.ping().then(() => true)).catch(() => false);
+    const redis = await this.#queue.getJobCounts().then(() => true).catch(() => false);
     const evidence = await this.#evidence.healthCheck().catch(() => false);
     return { db, redis, evidence, ready: db && redis && evidence };
   }
