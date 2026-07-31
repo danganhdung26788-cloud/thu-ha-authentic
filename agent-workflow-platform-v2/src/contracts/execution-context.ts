@@ -15,6 +15,9 @@ export const ExecutorSchema = z.enum([
   'HERMES',
   'CLAUDE_REVIEW',
   'SPECIALIST_AGENT',
+  'GEMINI',
+  'NOTEBOOKLM',
+  'CANVA',
 ]);
 
 export type AutonomyMode = z.infer<typeof AutonomyModeSchema>;
