@@ -6,7 +6,7 @@ test('admin page is local-token driven and does not embed credentials', () => {
   assert.match(ADMIN_PAGE, /Workflow AI V2/);
   assert.match(ADMIN_PAGE, /sessionStorage/);
   assert.match(ADMIN_PAGE, /API_AUTH_TOKEN/);
-  assert.match(ADMIN_PAGE, /GEMINI.*DISABLED \/ 0 COST/s);
+  assert.match(ADMIN_PAGE, /gemini.*disabled \/ 0 cost/is);
   assert.doesNotMatch(ADMIN_PAGE, /sk-[A-Za-z0-9_-]{20,}/);
   assert.doesNotMatch(ADMIN_PAGE, /AIza[0-9A-Za-z_-]{20,}/);
 });
