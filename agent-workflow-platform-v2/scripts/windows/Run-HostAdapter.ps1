@@ -23,7 +23,7 @@ Get-Content -Path $envFile | ForEach-Object {
   $line = $_.Trim()
   if (-not $line -or $line.StartsWith('#')) { return }
   $separator = $line.IndexOf('=')
-  if ($separator -lt 1) { throw "Invalid environment line in $envFile: $line" }
+  if ($separator -lt 1) { throw "Invalid environment line in ${envFile}: $line" }
   $name = $line.Substring(0, $separator)
   $value = $line.Substring($separator + 1)
   [Environment]::SetEnvironmentVariable($name, $value, 'Process')
