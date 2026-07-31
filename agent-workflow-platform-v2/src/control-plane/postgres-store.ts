@@ -2,7 +2,7 @@ import type pg from 'pg';
 import { CreateTaskSchema, TaskRecordSchema, type CreateTaskInput, type TaskRecord, type TaskStatus } from '../domain/task.js';
 import type { ExecutionRecord, ExecutionStatus } from '../domain/execution.js';
 import { getPool, withTransaction } from '../db/pool.js';
-import type { ApprovalInput, AuditEventInput, ControlPlaneStore } from './store.js';
+import type { ApprovalInput, AuditEventInput, ControlPlaneStore, EvidenceInput } from './store.js';
 
 type TaskRow = Readonly<{
   task_id: string;
@@ -67,20 +67,9 @@ export class PostgresControlPlaneStore implements ControlPlaneStore {
         ) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11::jsonb,'QUEUED',$12)
         ON CONFLICT(owner_id, workspace_id, idempotency_key) DO NOTHING
         RETURNING *`,
-        [
-          input.taskId,
-          input.correlationId,
-          input.idempotencyKey,
-          input.ownerId,
-          input.workspaceId,
-          input.objective,
-          JSON.stringify(input.readScope),
-          JSON.stringify(input.writeScope),
-          input.autonomyMode,
-          input.riskLevel,
-          JSON.stringify(input.payload),
-          input.maxAttempts,
-        ],
+        [input.taskId, input.correlationId, input.idempotencyKey, input.ownerId, input.workspaceId,
+          input.objective, JSON.stringify(input.readScope), JSON.stringify(input.writeScope),
+          input.autonomyMode, input.riskLevel, JSON.stringify(input.payload), input.maxAttempts],
       );
       const newRow = inserted.rows[0];
       if (newRow) {
@@ -92,8 +81,7 @@ export class PostgresControlPlaneStore implements ControlPlaneStore {
         return { task: mapTask(newRow), created: true };
       }
       const existing = await client.query<TaskRow>(
-        `SELECT * FROM tasks
-         WHERE owner_id = $1 AND workspace_id = $2 AND idempotency_key = $3`,
+        `SELECT * FROM tasks WHERE owner_id = $1 AND workspace_id = $2 AND idempotency_key = $3`,
         [input.ownerId, input.workspaceId, input.idempotencyKey],
       );
       const existingRow = existing.rows[0];
@@ -115,20 +103,9 @@ export class PostgresControlPlaneStore implements ControlPlaneStore {
   ): Promise<TaskRecord> {
     return withTransaction(async (client) => {
       await client.query(
-        `UPDATE tasks SET
-          status = $2,
-          attempt = COALESCE($3, attempt),
-          next_run_at = $4,
-          last_error = $5,
-          updated_at = now()
-         WHERE task_id = $1`,
-        [
-          taskId,
-          status,
-          options.attempt ?? null,
-          options.nextRunAt ?? null,
-          options.lastError ?? null,
-        ],
+        `UPDATE tasks SET status = $2, attempt = COALESCE($3, attempt), next_run_at = $4,
+          last_error = $5, updated_at = now() WHERE task_id = $1`,
+        [taskId, status, options.attempt ?? null, options.nextRunAt ?? null, options.lastError ?? null],
       );
       return selectTask(client, taskId);
     });
@@ -136,24 +113,13 @@ export class PostgresControlPlaneStore implements ControlPlaneStore {
 
   async startExecution(record: ExecutionRecord): Promise<void> {
     await getPool().query(
-      `INSERT INTO executions(
-        execution_id, task_id, owner_id, workspace_id, executor, status,
-        attempt, started_at, finished_at, result, error
-      ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)
-      ON CONFLICT(task_id, attempt) DO NOTHING`,
-      [
-        record.executionId,
-        record.taskId,
-        record.ownerId,
-        record.workspaceId,
-        record.executor,
-        record.status,
-        record.attempt,
-        record.startedAt,
-        record.finishedAt,
-        record.result ? JSON.stringify(record.result) : null,
-        record.error,
-      ],
+      `INSERT INTO executions(execution_id, task_id, owner_id, workspace_id, executor, status,
+        attempt, started_at, finished_at, result, error)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)
+       ON CONFLICT(task_id, attempt) DO NOTHING`,
+      [record.executionId, record.taskId, record.ownerId, record.workspaceId, record.executor,
+        record.status, record.attempt, record.startedAt, record.finishedAt,
+        record.result ? JSON.stringify(record.result) : null, record.error],
     );
   }
 
@@ -168,38 +134,37 @@ export class PostgresControlPlaneStore implements ControlPlaneStore {
        WHERE execution_id = $1 AND status = 'STARTED'`,
       [executionId, status, result ? JSON.stringify(result) : null, error],
     );
-    if (updated.rowCount !== 1) {
-      throw new Error(`Execution cannot be finished: ${executionId}`);
-    }
+    if (updated.rowCount !== 1) throw new Error(`Execution cannot be finished: ${executionId}`);
   }
 
   async createApproval(input: ApprovalInput): Promise<void> {
     await getPool().query(
-      `INSERT INTO approvals(
-        approval_id, task_id, owner_id, workspace_id, action, status
-      ) VALUES($1,$2,$3,$4,$5::jsonb,'PENDING')`,
+      `INSERT INTO approvals(approval_id, task_id, owner_id, workspace_id, action, status)
+       VALUES($1,$2,$3,$4,$5::jsonb,'PENDING')`,
       [input.approvalId, input.taskId, input.ownerId, input.workspaceId, JSON.stringify(input.action)],
+    );
+  }
+
+  async recordEvidence(input: EvidenceInput): Promise<void> {
+    await getPool().query(
+      `INSERT INTO evidence_objects(evidence_id, task_id, execution_id, owner_id, workspace_id,
+        object_key, sha256, media_type, size_bytes)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT(evidence_id) DO NOTHING`,
+      [input.evidenceId, input.taskId, input.executionId ?? null, input.ownerId,
+        input.workspaceId, input.objectKey, input.sha256, input.mediaType, input.sizeBytes],
     );
   }
 
   async appendAudit(event: AuditEventInput): Promise<void> {
     await getPool().query(
-      `INSERT INTO audit_events(
-        event_id, task_id, execution_id, correlation_id, owner_id,
-        workspace_id, event_type, actor, details
-      ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
-      ON CONFLICT(event_id) DO NOTHING`,
-      [
-        event.eventId,
-        event.taskId ?? null,
-        event.executionId ?? null,
-        event.correlationId,
-        event.ownerId,
-        event.workspaceId,
-        event.eventType,
-        event.actor,
-        JSON.stringify(event.details ?? {}),
-      ],
+      `INSERT INTO audit_events(event_id, task_id, execution_id, correlation_id, owner_id,
+        workspace_id, event_type, actor, details)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
+       ON CONFLICT(event_id) DO NOTHING`,
+      [event.eventId, event.taskId ?? null, event.executionId ?? null, event.correlationId,
+        event.ownerId, event.workspaceId, event.eventType, event.actor,
+        JSON.stringify(event.details ?? {})],
     );
   }
 
