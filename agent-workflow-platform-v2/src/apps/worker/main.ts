@@ -1,9 +1,9 @@
 import { logger } from '../../observability/logger.js';
 import { createTaskWorker } from '../../queue/task-queue.js';
 import { ControlPlanePump } from './control-plane-pump.js';
-import { processTaskJob } from './task-processor.js';
+import { processGuardedTaskJob } from './guarded-task-processor.js';
 
-const worker = createTaskWorker(processTaskJob);
+const worker = createTaskWorker(processGuardedTaskJob);
 const pump = new ControlPlanePump();
 const pumpTimer = setInterval(() => {
   void pump.tick().catch((error: unknown) => logger.error({ err: error }, 'Control-plane pump failed'));
