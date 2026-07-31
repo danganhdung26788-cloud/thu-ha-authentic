@@ -8,11 +8,12 @@ import { createTaskQueue, defaultTaskJobId, enqueueTask } from '../../src/queue/
 
 const integrationEnabled = process.env.RUN_INTEGRATION === '1';
 
-test('PostgreSQL task creation is owner-scoped and idempotent', { skip: !integrationEnabled }, async () => {
+test('PostgreSQL control plane is idempotent and resumes approved work through outbox', { skip: !integrationEnabled }, async () => {
   resetEnvForTests();
   const store = new PostgresControlPlaneStore();
   const suffix = randomUUID();
   const firstId = `TASK-${suffix}`;
+  const approvalId = `APR-${suffix}`;
   const common = {
     correlationId: `CORR-${suffix}`,
     idempotencyKey: `IDEM-${suffix}`,
@@ -30,6 +31,30 @@ test('PostgreSQL task creation is owner-scoped and idempotent', { skip: !integra
     assert.equal(first.created, true);
     assert.equal(replay.created, false);
     assert.equal(replay.task.taskId, firstId);
+
+    const createdEvents = await store.claimOutbox();
+    const created = createdEvents.find((event) => event.aggregateId === firstId);
+    assert.equal(created?.eventType, 'TASK_CREATED');
+    if (!created) throw new Error('Expected TASK_CREATED outbox event.');
+    await store.markOutboxPublished(created.outboxId);
+
+    await store.updateTaskStatus(firstId, 'WAITING_APPROVAL');
+    await store.createApproval({
+      approvalId,
+      taskId: firstId,
+      ownerId: common.ownerId,
+      workspaceId: common.workspaceId,
+      action: { action: 'bounded-write' },
+    });
+    const decision = await store.decideApproval({
+      approvalId,
+      decision: 'APPROVED',
+      actor: 'integration-test',
+    });
+    assert.equal(decision.taskId, firstId);
+    assert.equal((await store.getTask(firstId))?.status, 'QUEUED');
+    const approvedEvents = await store.claimOutbox();
+    assert.equal(approvedEvents.some((event) => event.aggregateId === firstId && event.eventType === 'TASK_APPROVED'), true);
     assert.equal(await store.healthCheck(), true);
   } finally {
     const pool = getPool();
