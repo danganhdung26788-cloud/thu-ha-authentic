@@ -1,9 +1,7 @@
 import { Runner } from '@openai/agents';
 import { createManagerAgent } from '../agents/manager-agent.js';
-import type {
-  ExecutionContext,
-  ManagerDecision,
-} from '../contracts/execution-context.js';
+import type { ExecutionContext, ManagerDecision } from '../contracts/execution-context.js';
+import { AgentRegistryStore } from '../registry/agent-registry.js';
 
 function readMaxTurns(): number {
   const parsed = Number.parseInt(process.env.AGENT_MAX_TURNS ?? '12', 10);
@@ -13,20 +11,24 @@ function readMaxTurns(): number {
   return parsed;
 }
 
+async function resolveManagerModel(): Promise<string> {
+  const registered = await new AgentRegistryStore().get('manager');
+  if (registered?.status !== 'ACTIVE') throw new Error('Manager Agent is not ACTIVE.');
+  const model = registered.model?.trim() || process.env.OPENAI_MANAGER_MODEL?.trim();
+  if (!model) throw new Error('Manager model is not configured in Agent Registry or OPENAI_MANAGER_MODEL.');
+  return model;
+}
+
 export async function runManagerDecision(
   context: ExecutionContext,
   request: string,
 ): Promise<ManagerDecision> {
-  const tracingDisabled =
-    process.env.OPENAI_AGENTS_DISABLE_TRACING?.trim() === '1';
-
   const runner = new Runner({
-    tracingDisabled,
+    tracingDisabled: process.env.OPENAI_AGENTS_DISABLE_TRACING?.trim() === '1',
     workflowName: 'workflow-v2-routing',
     traceIncludeSensitiveData: false,
   });
-
-  const agent = createManagerAgent();
+  const agent = createManagerAgent(await resolveManagerModel());
   const input = [
     'Route this task under the registered execution contract.',
     `TASK_ID=${context.taskId}`,
@@ -40,15 +42,7 @@ export async function runManagerDecision(
     '',
     request,
   ].join('\n');
-
-  const result = await runner.run(agent, input, {
-    context,
-    maxTurns: readMaxTurns(),
-  });
-
-  if (!result.finalOutput) {
-    throw new Error('Manager Agent completed without a structured decision.');
-  }
-
+  const result = await runner.run(agent, input, { context, maxTurns: readMaxTurns() });
+  if (!result.finalOutput) throw new Error('Manager Agent completed without a structured decision.');
   return result.finalOutput;
 }
