@@ -147,14 +147,12 @@ export class WorkspaceRegistry {
   list(): ReadonlyArray<Readonly<{
     workspaceId: string;
     codexRead: boolean;
-    codexWrite: boolean;
     localRead: boolean;
     localWrite: boolean;
   }>> {
     return this.#document.workspaces.map((workspace) => ({
       workspaceId: workspace.workspaceId,
       codexRead: workspace.allowCodexRead,
-      codexWrite: workspace.allowCodexWrite,
       localRead: workspace.allowLocalRead,
       localWrite: workspace.allowLocalWrite,
     }));
