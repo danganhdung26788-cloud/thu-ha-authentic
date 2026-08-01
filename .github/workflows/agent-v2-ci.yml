@@ -131,6 +131,12 @@ jobs:
           }
           if ($errors.Count -gt 0) { throw ($errors -join "`n") }
 
+      - name: Reject Windows PowerShell 5.1-incompatible patterns
+        shell: powershell
+        run: |
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\windows\Test-PowerShell51Compatibility.ps1' -ProjectRoot $PWD.Path
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 compatibility scan failed.' }
+
       - name: Bootstrap configuration with Windows PowerShell 5.1
         shell: powershell
         run: |

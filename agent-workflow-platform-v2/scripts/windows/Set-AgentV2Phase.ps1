@@ -11,7 +11,7 @@ param(
   [string]$ChangedBy = $env:USERNAME,
 
   [Parameter(Mandatory = $false)]
-  [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
+  [string]$ProjectRoot = '',
 
   [datetime]$RollbackUntil,
   [switch]$BackupVerified,
@@ -22,7 +22,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$ProjectRoot = (Resolve-Path $ProjectRoot).Path
+
+$ScriptDirectory = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+  $PSScriptRoot
+} else {
+  Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
+  $ProjectRoot = (Resolve-Path (Join-Path $ScriptDirectory '..\..')).Path
+} else {
+  $ProjectRoot = (Resolve-Path $ProjectRoot).Path
+}
+
 $envFile = Join-Path $ProjectRoot '.env'
 if (-not (Test-Path $envFile)) { throw "Missing configuration: $envFile" }
 
