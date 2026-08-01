@@ -40,20 +40,26 @@ export type RedactionResult = Readonly<{
   redactionCount: number;
 }>;
 
+function truncateUtf8(value: string, maxBytes: number): string {
+  const buffer = Buffer.from(value, 'utf8');
+  if (buffer.length <= maxBytes) return value;
+  let end = maxBytes;
+  while (end > 0 && (buffer[end] ?? 0) >= 0x80 && (buffer[end] ?? 0) < 0xc0) {
+    end -= 1;
+  }
+  return `${buffer.subarray(0, end).toString('utf8')}\n[TRUNCATED_BY_DIAGNOSTIC_LIMIT]`;
+}
+
 export function redactSecrets(input: string, maxBytes = 20_480): RedactionResult {
   let text = input;
   let redactionCount = 0;
   for (const rule of PATTERNS) {
-    text = text.replace(rule.pattern, (...args: unknown[]) => {
-      redactionCount += 1;
-      const match = String(args[0]);
-      return match.replace(rule.pattern, rule.replacement);
-    });
+    const matches = text.match(rule.pattern);
+    redactionCount += matches?.length ?? 0;
+    text = text.replace(rule.pattern, rule.replacement);
   }
-  const bytes = Buffer.byteLength(text, 'utf8');
-  if (bytes > maxBytes) {
-    const buffer = Buffer.from(text, 'utf8');
-    text = `${buffer.subarray(0, maxBytes).toString('utf8')}\n[TRUNCATED_BY_DIAGNOSTIC_LIMIT]`;
-  }
-  return { text, redactionCount };
+  return {
+    text: truncateUtf8(text, maxBytes),
+    redactionCount,
+  };
 }
