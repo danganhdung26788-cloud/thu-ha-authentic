@@ -22,6 +22,7 @@ const EnvSchema = z.object({
   MAX_REQUEST_BYTES: z.coerce.number().int().min(16_384).max(10_485_760).default(1_048_576),
   MAX_OUTPUT_BYTES: z.coerce.number().int().min(16_384).max(10_485_760).default(1_048_576),
   DEFAULT_TIMEOUT_SECONDS: z.coerce.number().int().min(10).max(1_800).default(300),
+  DELEGATION_OWNER_ID: z.string().min(1).max(120).default('danganhdung'),
   WORKSPACE_REGISTRY_PATH: z.string().min(1).default('./config/workspaces.json'),
 
   CODEX_ENABLED: booleanString('true'),
@@ -52,6 +53,7 @@ export type BridgeConfig = Readonly<{
   maxRequestBytes: number;
   maxOutputBytes: number;
   defaultTimeoutSeconds: number;
+  ownerId: string;
   workspaceRegistryPath: string;
   codex: Readonly<{
     enabled: boolean;
@@ -110,6 +112,7 @@ export function getConfig(source: NodeJS.ProcessEnv = process.env): BridgeConfig
     maxRequestBytes: env.MAX_REQUEST_BYTES,
     maxOutputBytes: env.MAX_OUTPUT_BYTES,
     defaultTimeoutSeconds: env.DEFAULT_TIMEOUT_SECONDS,
+    ownerId: env.DELEGATION_OWNER_ID,
     workspaceRegistryPath: env.WORKSPACE_REGISTRY_PATH,
     codex: {
       enabled: env.CODEX_ENABLED,
