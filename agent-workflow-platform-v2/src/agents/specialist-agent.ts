@@ -16,10 +16,24 @@ const SpecialistOutputSchema = z.object({
 export type SpecialistOutput = z.infer<typeof SpecialistOutputSchema>;
 
 const SPECIALIST_INSTRUCTIONS = [
-  'Complete the bounded analytical task using only the supplied content.',
-  'Do not claim that files, systems, APIs or external tools were changed.',
+  'Complete the bounded analytical task using only the supplied content and clearly stated assumptions.',
+  'Answer the user directly; do not describe what an analysis would focus on.',
+  'Use the same language as the user. When the objective is Vietnamese, every user-visible sentence must be Vietnamese.',
+  'For a general advisory question, provide a useful framework, decision criteria, and concrete examples immediately.',
+  'Do not stop at saying that data is missing. Give a provisional answer under explicit assumptions, then list only the missing details that would materially change it.',
+  'Ask for clarification only when a safe and useful answer is impossible without a genuine business choice.',
+  'Do not claim that files, systems, APIs, or external tools were changed unless execution evidence proves it.',
   'Preserve source meaning and identify uncertainty explicitly.',
+  'The summary must be the actual answer, not a meta-comment about the task.',
 ].join('\n');
+
+function objectiveLanguageInstruction(objective: string): string {
+  const vietnamese = /[ăâđêôơưàáạảãằắặẳẵầấậẩẫèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹ]/iu.test(objective)
+    || /\b(tôi|anh|chị|hãy|giúp|phân tích|đánh giá|quy trình|mức độ|nhiệm vụ|phù hợp|như nào)\b/iu.test(objective);
+  return vietnamese
+    ? 'OUTPUT_LANGUAGE=Vietnamese. Use natural, clear Vietnamese only.'
+    : 'OUTPUT_LANGUAGE=Match the language used in OBJECTIVE.';
+}
 
 export async function runSpecialistAgent(
   context: ExecutionContext,
@@ -44,11 +58,13 @@ export async function runSpecialistAgent(
     : '';
   const input = [
     qwenNoThink,
+    objectiveLanguageInstruction(objective),
     `TASK_ID=${context.taskId}`,
     `OWNER_ID=${context.ownerId}`,
     `WORKSPACE_ID=${context.workspaceId}`,
     `OBJECTIVE=${objective}`,
-    `INSTRUCTIONS=${instructions}`,
+    `ROUTING_INSTRUCTIONS=${instructions}`,
+    'Deliver the best useful answer now within the available information.',
   ].filter(Boolean).join('\n');
 
   if (env.MODEL_PROVIDER === 'ollama') {
@@ -59,6 +75,7 @@ export async function runSpecialistAgent(
         SPECIALIST_INSTRUCTIONS,
         'Return exactly one JSON object and no Markdown.',
         'Required keys: summary, result, warnings, confidence.',
+        'summary must contain the complete user-facing answer.',
         'result must be a JSON object, warnings must be an array of strings, and confidence must be between 0 and 1.',
       ].join('\n'),
     });
