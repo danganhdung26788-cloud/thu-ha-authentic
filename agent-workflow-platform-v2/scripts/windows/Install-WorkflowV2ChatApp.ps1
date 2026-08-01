@@ -77,15 +77,15 @@ $programs = [Environment]::GetFolderPath('Programs')
 $desktopShortcut = Join-Path $desktop 'Workflow AI.lnk'
 $startMenuShortcut = Join-Path $programs 'Workflow AI.lnk'
 $arguments = '"{0}"' -f $openVbs
-New-Shortcut -Path $desktopShortcut -Target $wscript -Arguments $arguments -WorkingDirectory $ProjectRoot -Description 'Mở Workflow AI bằng giao diện chat'
-New-Shortcut -Path $startMenuShortcut -Target $wscript -Arguments $arguments -WorkingDirectory $ProjectRoot -Description 'Mở Workflow AI bằng giao diện chat'
+New-Shortcut -Path $desktopShortcut -Target $wscript -Arguments $arguments -WorkingDirectory $ProjectRoot -Description 'Open Workflow AI chat interface'
+New-Shortcut -Path $startMenuShortcut -Target $wscript -Arguments $arguments -WorkingDirectory $ProjectRoot -Description 'Open Workflow AI chat interface'
 
 $taskName = 'Hermes-V2-ChatApp'
 $taskAction = New-ScheduledTaskAction -Execute $wscript -Argument ('"{0}"' -f $backgroundVbs) -WorkingDirectory $ProjectRoot
 $taskTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
 $taskPrincipal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $taskTrigger -Settings $taskSettings -Principal $taskPrincipal -Description 'Khởi động nền Workflow AI V2 và kiểm tra readiness khi đăng nhập.' -Force | Out-Null
+Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $taskTrigger -Settings $taskSettings -Principal $taskPrincipal -Description 'Start Workflow AI V2 in the background and verify readiness at logon.' -Force | Out-Null
 Start-ScheduledTask -TaskName $taskName
 
 Write-Host "Workflow AI shortcut installed: $desktopShortcut"
