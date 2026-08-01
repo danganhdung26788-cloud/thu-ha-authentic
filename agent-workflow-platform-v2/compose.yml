@@ -46,6 +46,17 @@ services:
       retries: 10
     networks: [control]
 
+  clamav:
+    image: clamav/clamav:1.5
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --ping 1 >/dev/null 2>&1"]
+      interval: 20s
+      timeout: 10s
+      retries: 30
+      start_period: 90s
+    networks: [control]
+
   ollama:
     image: ollama/ollama:0.32.3
     restart: unless-stopped
@@ -107,6 +118,10 @@ services:
       CHAT_ATTACHMENT_SCOPE_ROOT: runtime/chat-attachments
       CHAT_MAX_ATTACHMENT_BYTES: ${CHAT_MAX_ATTACHMENT_BYTES:-26214400}
       CHAT_MAX_DIAGNOSTIC_BYTES: ${CHAT_MAX_DIAGNOSTIC_BYTES:-20480}
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
+      CLAMAV_TIMEOUT_MS: ${CLAMAV_TIMEOUT_MS:-120000}
+      CLAMAV_REQUIRED: ${CLAMAV_REQUIRED:-true}
       RUNTIME_GIT_COMMIT: ${RUNTIME_GIT_COMMIT:-unknown}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-}
@@ -140,6 +155,8 @@ services:
       redis:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      clamav:
         condition: service_healthy
       ollama-pull:
         condition: service_completed_successfully
