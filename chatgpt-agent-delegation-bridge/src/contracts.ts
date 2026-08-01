@@ -11,7 +11,6 @@ export const WorkspaceRegistrationSchema = z.object({
   allowedScripts: z.array(z.string().min(1)).default([]),
   scheduledTaskPrefix: z.string().min(1).max(120).default('SYSTEM-AI-'),
   allowCodexRead: z.boolean().default(true),
-  allowCodexWrite: z.boolean().default(false),
   allowLocalRead: z.boolean().default(true),
   allowLocalWrite: z.boolean().default(false),
 });
@@ -32,6 +31,7 @@ const CommonDelegationSchema = z.object({
 
 export const CodexDelegationInputSchema = CommonDelegationSchema.extend({
   paths: z.array(z.string().trim().min(1).max(1_000)).max(50).default([]),
+  responseFormat: z.enum(['analysis', 'implementation-plan', 'unified-diff-proposal']).default('analysis'),
 });
 
 export const LocalInspectInputSchema = z.object({
