@@ -2,19 +2,19 @@ import type { BridgeConfig } from './config.js';
 import {
   CodexDelegationInputSchema,
   DelegationResultSchema,
-  HermesExecuteInputSchema,
-  HermesInspectInputSchema,
+  LocalExecuteInputSchema,
+  LocalInspectInputSchema,
   SpecialistDelegationInputSchema,
   type CodexDelegationInput,
   type DelegationResult,
-  type HermesExecuteInput,
-  type HermesInspectInput,
+  type LocalExecuteInput,
+  type LocalInspectInput,
   type SpecialistDelegationInput,
 } from './contracts.js';
 import { redactSecrets } from './redaction.js';
 import { AgentsSdkSpecialist } from './specialists/agents-sdk.js';
 import { CodexSpecialist } from './specialists/codex.js';
-import { HermesSpecialist } from './specialists/hermes.js';
+import { LocalExecutor } from './specialists/local-executor.js';
 import { WorkspaceRegistry } from './workspace-registry.js';
 
 type CacheEntry = Readonly<{
@@ -24,7 +24,7 @@ type CacheEntry = Readonly<{
 
 export class DelegationService {
   readonly #codex: CodexSpecialist;
-  readonly #hermes: HermesSpecialist;
+  readonly #localExecutor: LocalExecutor;
   readonly #specialist: AgentsSdkSpecialist;
   readonly #cache = new Map<string, CacheEntry>();
 
@@ -33,7 +33,7 @@ export class DelegationService {
     readonly workspaces: WorkspaceRegistry,
   ) {
     this.#codex = new CodexSpecialist(config);
-    this.#hermes = new HermesSpecialist(config, workspaces);
+    this.#localExecutor = new LocalExecutor(config, workspaces);
     this.#specialist = new AgentsSdkSpecialist(config);
   }
 
@@ -49,16 +49,22 @@ export class DelegationService {
     return this.deduplicate(input.idempotencyKey, () => this.#codex.run('write', workspace, input));
   }
 
-  async inspectWithHermes(raw: unknown): Promise<DelegationResult> {
-    const input = HermesInspectInputSchema.parse(raw);
+  async inspectLocalRuntime(raw: unknown): Promise<DelegationResult> {
+    const input = LocalInspectInputSchema.parse(raw);
     const workspace = this.workspaces.get(input.workspaceId);
-    return this.deduplicate(input.idempotencyKey, () => this.#hermes.inspect(workspace, input));
+    return this.deduplicate(
+      input.idempotencyKey,
+      () => this.#localExecutor.inspect(workspace, input),
+    );
   }
 
-  async executeWithHermes(raw: unknown): Promise<DelegationResult> {
-    const input = HermesExecuteInputSchema.parse(raw);
+  async executeLocalOperations(raw: unknown): Promise<DelegationResult> {
+    const input = LocalExecuteInputSchema.parse(raw);
     const workspace = this.workspaces.get(input.workspaceId);
-    return this.deduplicate(input.idempotencyKey, () => this.#hermes.execute(workspace, input));
+    return this.deduplicate(
+      input.idempotencyKey,
+      () => this.#localExecutor.execute(workspace, input),
+    );
   }
 
   async askSpecialist(raw: unknown): Promise<DelegationResult> {
@@ -68,7 +74,9 @@ export class DelegationService {
 
   async health(): Promise<Record<string, unknown>> {
     return {
-      ok: this.config.codex.enabled || this.config.hermes.enabled || this.config.specialist.enabled,
+      ok: this.config.codex.enabled
+        || this.config.localExecutor.enabled
+        || this.config.specialist.enabled,
       architecture: {
         chatgptPrimaryBrain: true,
         backendManagerAgent: false,
@@ -79,7 +87,7 @@ export class DelegationService {
       },
       targets: {
         codex: { enabled: this.config.codex.enabled },
-        hermes: this.#hermes.health(),
+        localExecutor: this.#localExecutor.health(),
         specialistAgent: {
           enabled: this.config.specialist.enabled,
           modelConfigured: Boolean(this.config.specialist.model),
@@ -116,7 +124,10 @@ export class DelegationService {
     if (Buffer.byteLength(serialized, 'utf8') <= this.config.maxOutputBytes) return parsed;
     return {
       ...parsed,
-      summary: redactSecrets(parsed.summary, Math.min(64_000, this.config.maxOutputBytes / 2)),
+      summary: redactSecrets(
+        parsed.summary,
+        Math.min(64_000, this.config.maxOutputBytes / 2),
+      ),
       result: { truncated: true, reason: 'Delegation result exceeded bridge output limit.' },
       evidence: [],
       warnings: [...parsed.warnings, 'Large result was truncated by the delegation bridge.'],
@@ -133,7 +144,7 @@ export class DelegationService {
 
 export type {
   CodexDelegationInput,
-  HermesExecuteInput,
-  HermesInspectInput,
+  LocalExecuteInput,
+  LocalInspectInput,
   SpecialistDelegationInput,
 };
