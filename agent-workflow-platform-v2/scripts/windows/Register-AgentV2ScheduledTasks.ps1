@@ -25,6 +25,19 @@ $nodePath = (Get-Command node.exe -ErrorAction Stop).Source
 $entrypoint = Join-Path $ProjectRoot 'dist\src\apps\host-adapter\main.js'
 if (-not (Test-Path $entrypoint)) { throw "Missing compiled host adapter: $entrypoint" }
 
+function Read-EnvValue([string]$Path, [string]$Name) {
+  foreach ($line in Get-Content -LiteralPath $Path) {
+    $trimmed = $line.Trim()
+    if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
+    $separator = $trimmed.IndexOf('=')
+    if ($separator -le 0) { continue }
+    if ($trimmed.Substring(0, $separator) -eq $Name) {
+      return $trimmed.Substring($separator + 1)
+    }
+  }
+  return $null
+}
+
 function Get-PortListeners([int]$Port) {
   return @(
     Get-NetTCPConnection `
@@ -84,14 +97,21 @@ function Stop-StaleAdapterListener(
   }
 }
 
-function Wait-AdapterHealth([string]$Role, [int]$Port, [string]$TaskName) {
+function Wait-AdapterHealth(
+  [string]$Role,
+  [int]$Port,
+  [string]$TaskName,
+  [string]$Token
+) {
   $deadline = (Get-Date).AddSeconds(30)
+  $headers = @{ Authorization = "Bearer $Token" }
   do {
     try {
       $health = Invoke-RestMethod `
         -Uri "http://127.0.0.1:$Port/health" `
+        -Headers $headers `
         -TimeoutSec 3
-      if ($health.ok -eq $true -or $health.status -eq 'ok') {
+      if ($health.ok -eq $true) {
         return
       }
     } catch {
@@ -103,7 +123,7 @@ function Wait-AdapterHealth([string]$Role, [int]$Port, [string]$TaskName) {
   $info = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
   $state = if ($null -ne $task) { $task.State } else { 'MISSING' }
   $result = if ($null -ne $info) { $info.LastTaskResult } else { 'UNKNOWN' }
-  throw "$Role adapter failed health verification on port $Port. TaskState=$state, LastTaskResult=$result"
+  throw "$Role adapter failed authenticated health verification on port $Port. TaskState=$state, LastTaskResult=$result"
 }
 
 $currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -129,6 +149,10 @@ foreach ($roleConfig in $roles) {
   $taskName = "$TaskPrefix$($role.Substring(0,1).ToUpper())$($role.Substring(1))-HostAdapter"
   $envFile = Join-Path $ProjectRoot "runtime\host-adapter.$role.env"
   if (-not (Test-Path $envFile)) { throw "Missing host adapter configuration: $envFile" }
+  $token = Read-EnvValue -Path $envFile -Name 'HOST_ADAPTER_TOKEN'
+  if ([string]::IsNullOrWhiteSpace($token)) {
+    throw "HOST_ADAPTER_TOKEN is missing from $envFile"
+  }
 
   $arguments = "--env-file=`"$envFile`" `"$entrypoint`""
   $action = New-ScheduledTaskAction `
@@ -148,7 +172,7 @@ foreach ($roleConfig in $roles) {
 
     Register-ScheduledTask -TaskName $taskName -InputObject $task -Force | Out-Null
     Start-ScheduledTask -TaskName $taskName
-    Wait-AdapterHealth -Role $role -Port $port -TaskName $taskName
-    Write-Host "Registered, started and health-verified $taskName with direct node.exe lifecycle"
+    Wait-AdapterHealth -Role $role -Port $port -TaskName $taskName -Token $token
+    Write-Host "Registered, started and authenticated-health-verified $taskName with direct node.exe lifecycle"
   }
 }
