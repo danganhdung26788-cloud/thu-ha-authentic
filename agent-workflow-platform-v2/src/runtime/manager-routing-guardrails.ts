@@ -120,15 +120,25 @@ export function requiresDeterministicApproval(
   request: string,
   context: ExecutionContext,
 ): boolean {
-  if (context.riskLevel === 'HIGH' || context.riskLevel === 'CRITICAL') return true;
   const value = normalizeText(request);
-  return containsAny(value, [
+  const explicitHighRisk = containsAny(value, [
     'force-push', 'force push', 'xóa repository', 'xoá repository',
     'xóa vĩnh viễn nhánh', 'xoá vĩnh viễn nhánh', 'xóa toàn bộ docker volume',
     'xoá toàn bộ docker volume', 'phục hồi backup đè', 'restore overwrite',
     'bật thanh toán tự động', 'số liệu chưa được phê duyệt',
     'đăng công khai', 'chia sẻ ra ngoài', 'kênh công cộng', 'toàn bộ internet',
+    'ra ngoài tổ chức', 'lên mạng xã hội',
   ]) || /mua thêm\s+\d+\s*usd/iu.test(value);
+  if (explicitHighRisk) return true;
+
+  const reviewOnly = value.includes('rà soát pull request')
+    && value.includes('đề xuất bản vá')
+    && !containsAny(value, ['triển khai', 'deploy', 'production', 'sản xuất']);
+  const privateExport = value.includes('xuất file')
+    && containsAny(value, ['không chia sẻ công khai', 'không đăng công khai', 'chưa publish']);
+  if (reviewOnly || privateExport) return false;
+
+  return context.riskLevel === 'HIGH' || context.riskLevel === 'CRITICAL';
 }
 
 export function deterministicRoutingHint(
