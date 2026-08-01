@@ -19,6 +19,16 @@ import {
   type TaskJobData,
   type TaskJobResult,
 } from '../../queue/task-queue.js';
+import {
+  chatApprovalRequested,
+  chatExecutionStarted,
+  chatRouteAuthorized,
+  chatTaskClaimed,
+  chatTaskCompleted,
+  chatTaskFailed,
+  chatTaskRetryScheduled,
+  interruptForClarification,
+} from './chat-task-events.js';
 import { resolveAuthorizedRoute } from './route-authorizer.js';
 
 const TERMINAL = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
@@ -88,6 +98,7 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
     if (TERMINAL.has(task.status)) {
       return { taskId, status: task.status === 'COMPLETED' ? 'COMPLETED' : 'FAILED' };
     }
+    if (task.status === 'WAITING_INPUT') return { taskId, status: 'WAITING_INPUT' };
     if (task.status === 'WAITING_APPROVAL') return { taskId, status: 'WAITING_APPROVAL' };
 
     const attempt = task.status === 'RUNNING' ? Math.max(1, task.attempt) : task.attempt + 1;
@@ -117,6 +128,9 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
       eventType: 'TASK_CLAIMED',
       actor: 'ORCHESTRATOR_WORKER',
       details: { attempt, bullJobId: job.id },
+    });
+    await chatTaskClaimed(task).catch((error: unknown) => {
+      logger.warn({ err: error, taskId }, 'Chat progress update failed after task claim');
     });
 
     const context: ExecutionContext = {
@@ -156,6 +170,14 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
         approvalResumed: approvalLease?.approvalId ?? null,
       },
     });
+    await chatRouteAuthorized(task, manager).catch((error: unknown) => {
+      logger.warn({ err: error, taskId }, 'Chat route progress update failed');
+    });
+
+    if (await interruptForClarification(store, task, executionId, manager)) {
+      taskTransitions.inc({ from: 'RUNNING', to: 'WAITING_INPUT' });
+      return { taskId, status: 'WAITING_INPUT' };
+    }
 
     if (approvalLease) {
       await store.appendAudit({
@@ -188,6 +210,14 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
         actor: 'POLICY_ENGINE',
         details: { manager, policy, actionRequest },
       });
+      await chatTaskFailed(
+        { ...task, attempt, status: 'FAILED', lastError: policy.reason },
+        new Error(policy.reason),
+        manager.executor,
+        'ROUTING',
+      ).catch((error: unknown) => {
+        logger.warn({ err: error, taskId }, 'Chat diagnostic failed after policy denial');
+      });
       return { taskId, status: 'FAILED' };
     }
 
@@ -214,8 +244,15 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
         actor: 'POLICY_ENGINE',
         details: { approvalId, manager, policy, actionRequest },
       });
+      await chatApprovalRequested(task, approvalId, manager, policy.reason).catch((error: unknown) => {
+        logger.warn({ err: error, taskId }, 'Chat approval card generation failed');
+      });
       return { taskId, status: 'WAITING_APPROVAL' };
     }
+
+    await chatExecutionStarted(task, manager).catch((error: unknown) => {
+      logger.warn({ err: error, taskId }, 'Chat execution progress update failed');
+    });
 
     let result: ExecutorResult;
     if (manager.executor === 'SPECIALIST_AGENT' || manager.executor === 'CHATGPT') {
@@ -275,7 +312,7 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
       workspaceId: task.workspaceId,
     });
 
-    if (result.status === 'SUCCEEDED') {
+    if (result.status === 'SUCCEEDED' || result.status === 'HANDOFF') {
       await store.finishExecution(executionId, 'SUCCEEDED', {
         manager,
         policy,
@@ -291,9 +328,12 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
         correlationId: task.correlationId,
         ownerId: task.ownerId,
         workspaceId: task.workspaceId,
-        eventType: 'TASK_COMPLETED',
+        eventType: result.status === 'HANDOFF' ? 'TASK_HANDOFF_PREPARED' : 'TASK_COMPLETED',
         actor: manager.executor,
-        details: { summary: result.summary, resultEvidence },
+        details: { summary: result.summary, resultEvidence, resultStatus: result.status },
+      });
+      await chatTaskCompleted(task, manager, result).catch((error: unknown) => {
+        logger.warn({ err: error, taskId }, 'Chat completion message failed');
       });
       if (approvalLease) await finalizeApprovalLease(store, approvalLease, context);
       return { taskId, status: 'COMPLETED' };
@@ -350,6 +390,9 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
           error: message,
         },
       });
+      await chatTaskRetryScheduled(task, message, nextRunAt).catch((chatError: unknown) => {
+        logger.warn({ err: chatError, taskId }, 'Chat retry progress update failed');
+      });
       return { taskId, status: 'RETRY_WAIT' };
     }
     taskTransitions.inc({ from: 'RUNNING', to: 'FAILED' });
@@ -364,6 +407,13 @@ export async function processTaskJob(job: Job<TaskJobData, TaskJobResult>): Prom
       eventType: 'TASK_FAILED',
       actor: 'ORCHESTRATOR_WORKER',
       details: { attempt, error: message },
+    });
+    await chatTaskFailed(
+      { ...task, attempt, status: 'FAILED', lastError: message },
+      error,
+      executorLabel,
+    ).catch((chatError: unknown) => {
+      logger.warn({ err: chatError, taskId }, 'Chat failure diagnostic generation failed');
     });
     logger.error({ err: error, taskId, attempt }, 'Task failed');
     return { taskId, status: 'FAILED' };
