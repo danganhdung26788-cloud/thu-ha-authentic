@@ -50,7 +50,9 @@ $WorkspaceRoot = [System.IO.Path]::GetFullPath($WorkspaceRoot)
 $envTemplate = Join-Path $ProjectRoot '.env.example'
 $envFile = Join-Path $ProjectRoot '.env'
 $runtimeDir = Join-Path $ProjectRoot 'runtime'
+$attachmentDir = Join-Path $runtimeDir 'chat-attachments'
 New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+New-Item -ItemType Directory -Force -Path $attachmentDir | Out-Null
 New-Item -ItemType Directory -Force -Path $WorkspaceRoot | Out-Null
 
 if (-not (Test-Path $envTemplate)) { throw "Missing template: $envTemplate" }
@@ -72,6 +74,21 @@ $content = Set-EnvValue $content 'ADAPTER_AUTH_TOKEN' $adapterToken
 $content = Set-EnvValue $content 'HERMES_ADAPTER_URL' 'http://host.docker.internal:3201'
 $content = Set-EnvValue $content 'CODEX_ADAPTER_URL' 'http://host.docker.internal:3202'
 $content = Set-EnvValue $content 'CLAUDE_ADAPTER_URL' ''
+$content = Set-EnvValue $content 'MODEL_PROVIDER' 'ollama'
+$content = Set-EnvValue $content 'MODEL_BASE_URL' 'http://ollama:11434/v1'
+$content = Set-EnvValue $content 'MODEL_API_KEY' 'ollama-local'
+$content = Set-EnvValue $content 'MANAGER_MODEL' 'qwen3:4b'
+$content = Set-EnvValue $content 'SPECIALIST_MODEL' 'qwen3:4b'
+$content = Set-EnvValue $content 'MODEL_USE_RESPONSES' 'false'
+$content = Set-EnvValue $content 'OLLAMA_MODEL' 'qwen3:4b'
+$content = Set-EnvValue $content 'OPENAI_API_KEY' ''
+$content = Set-EnvValue $content 'OPENAI_MANAGER_MODEL' ''
+$content = Set-EnvValue $content 'OPENAI_SPECIALIST_MODEL' ''
+$content = Set-EnvValue $content 'DEFAULT_OWNER_ID' 'danganhdung'
+$content = Set-EnvValue $content 'DEFAULT_WORKSPACE_ID' 'workflow-v2-sandbox'
+$content = Set-EnvValue $content 'CHAT_ATTACHMENT_ROOT' '/workspace/chat-attachments'
+$content = Set-EnvValue $content 'CHAT_ATTACHMENT_SCOPE_ROOT' 'runtime/chat-attachments'
+$content = Set-EnvValue $content 'RUNTIME_GIT_COMMIT' 'unknown'
 $content = Set-EnvValue $content 'GOOGLE_API_KEY' ''
 $content = Set-EnvValue $content 'GEMINI_MODEL' ''
 $content = Set-EnvValue $content 'CANVA_ADAPTER_URL' ''
@@ -101,5 +118,6 @@ foreach ($role in @('hermes', 'codex')) {
 }
 
 Write-Host "Created secure V2 configuration at $envFile"
-Write-Host 'Gemini API remains disabled and will not incur API cost.'
+Write-Host 'Local Ollama Manager is configured; OpenAI and Gemini API billing remain disabled.'
 Write-Host "Workspace registry: $workspaceFile"
+Write-Host "Chat attachment directory: $attachmentDir"
