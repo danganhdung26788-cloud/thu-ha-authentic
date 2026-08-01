@@ -5,6 +5,11 @@ export const OutputLanguageSchema = z.enum(['vi', 'en']).default('vi');
 export const WorkspaceRegistrationSchema = z.object({
   workspaceId: z.string().min(1).max(120),
   root: z.string().min(1),
+  readRoots: z.array(z.string().min(1)).default(['.']),
+  writeRoots: z.array(z.string().min(1)).default([]),
+  allowedExecutables: z.array(z.string().min(1)).default([]),
+  allowedScripts: z.array(z.string().min(1)).default([]),
+  scheduledTaskPrefix: z.string().min(1).max(120).default('SYSTEM-AI-'),
   allowCodexRead: z.boolean().default(true),
   allowCodexWrite: z.boolean().default(false),
   allowHermesRead: z.boolean().default(true),
