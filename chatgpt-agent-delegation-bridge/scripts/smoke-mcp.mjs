@@ -16,6 +16,7 @@ try {
   const tools = await client.listTools();
   const names = tools.tools.map((tool) => tool.name).sort();
   if (!names.includes('delegation_health')) throw new Error('delegation_health is missing.');
+  if (names.includes('execute_codex')) throw new Error('Direct Codex mutation tool must not be exposed.');
   const health = await client.callTool({ name: 'delegation_health', arguments: {} });
   if (health.isError) throw new Error('delegation_health returned an MCP error.');
   const structured = health.structuredContent || {};
@@ -24,6 +25,9 @@ try {
   if (architecture.backendManagerAgent !== false) throw new Error('Backend Manager must remain disabled.');
   if (architecture.automaticBackendRouting !== false) throw new Error('Automatic backend routing must remain disabled.');
   if (architecture.v2RuntimeDependency !== false) throw new Error('V2 runtime dependency must remain disabled.');
+  if (architecture.specialistAiMayMutateUserWorkspace !== false) {
+    throw new Error('Specialist AI mutation must remain disabled.');
+  }
   console.log(JSON.stringify({ ok: true, url: url.toString(), tools: names, architecture }, null, 2));
 } finally {
   await client.close().catch(() => undefined);
