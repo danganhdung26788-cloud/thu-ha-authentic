@@ -36,8 +36,18 @@ Get-ChildItem -Path $windowsScripts -Filter '*.ps1' -File | ForEach-Object {
   }
 }
 
+$registrationPath = Join-Path $windowsScripts 'Register-AgentV2ScheduledTasks.ps1'
+$registration = Get-Content -Raw -LiteralPath $registrationPath
+if ($registration -match "-Execute\s+'powershell\.exe'" -or $registration -match 'Run-HostAdapter\.ps1') {
+  $violations += "${registrationPath}: host adapters must not use a PowerShell console wrapper"
+}
+if ($registration -notmatch 'Get-Command\s+node\.exe' -or $registration -notmatch '--env-file=' -or $registration -notmatch '-Execute\s+\$nodePath') {
+  $violations += "${registrationPath}: direct node.exe Scheduled Task contract is missing"
+}
+
 if ($violations.Count -gt 0) {
   throw "Windows PowerShell 5.1 compatibility violations:`n$($violations -join "`n")"
 }
 
 Write-Host 'Windows PowerShell 5.1 compatibility scan PASS.'
+Write-Host 'Direct node.exe host adapter lifecycle contract PASS.'

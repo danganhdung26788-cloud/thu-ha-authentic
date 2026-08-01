@@ -1,4 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import Fastify from 'fastify';
 import { ExecutorRequestSchema, ExecutorResultSchema, type ExecutorResult } from '../executors/contracts.js';
 import type { HostAdapterEnv } from './config.js';
@@ -29,6 +31,17 @@ function assertHeaderContract(
   }
 }
 
+function hostLogPath(env: HostAdapterEnv): string {
+  const path = resolve(
+    env.HOST_ADAPTER_RECEIPT_ROOT,
+    '..',
+    'logs',
+    `${env.HOST_ADAPTER_ROLE.toLowerCase()}.stdout.log`,
+  );
+  mkdirSync(dirname(path), { recursive: true });
+  return path;
+}
+
 export async function buildHostAdapterServer(env: HostAdapterEnv) {
   const registry = await WorkspaceRegistry.load(env.HOST_ADAPTER_REGISTRY_PATH);
   const executor = env.HOST_ADAPTER_ROLE === 'HERMES'
@@ -37,7 +50,10 @@ export async function buildHostAdapterServer(env: HostAdapterEnv) {
   const receipts = new ReceiptStore(env.HOST_ADAPTER_RECEIPT_ROOT, env.HOST_ADAPTER_ROLE);
   const inFlight = new Map<string, Promise<ExecutorResult>>();
   const app = Fastify({
-    logger: true,
+    logger: {
+      level: 'info',
+      file: hostLogPath(env),
+    },
     bodyLimit: 10 * 1024 * 1024,
     requestTimeout: env.HOST_ADAPTER_DEFAULT_TIMEOUT_MS + 30_000,
   });
