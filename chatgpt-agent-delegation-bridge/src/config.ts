@@ -31,6 +31,7 @@ const EnvSchema = z.object({
   CODEX_NETWORK_ACCESS: booleanString('false'),
 
   LOCAL_EXECUTOR_ENABLED: booleanString('false'),
+  LOCAL_APPROVAL_TTL_SECONDS: z.coerce.number().int().min(30).max(900).default(300),
 
   SPECIALIST_AGENT_ENABLED: booleanString('false'),
   SPECIALIST_MODEL: optionalString(),
@@ -61,6 +62,7 @@ export type BridgeConfig = Readonly<{
   }>;
   localExecutor: Readonly<{
     enabled: boolean;
+    approvalTtlSeconds: number;
   }>;
   specialist: Readonly<{
     enabled: boolean;
@@ -115,6 +117,7 @@ export function getConfig(source: NodeJS.ProcessEnv = process.env): BridgeConfig
     },
     localExecutor: {
       enabled: env.LOCAL_EXECUTOR_ENABLED,
+      approvalTtlSeconds: env.LOCAL_APPROVAL_TTL_SECONDS,
     },
     specialist: {
       enabled: env.SPECIALIST_AGENT_ENABLED,

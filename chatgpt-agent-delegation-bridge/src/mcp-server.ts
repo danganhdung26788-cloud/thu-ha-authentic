@@ -43,6 +43,22 @@ const codexInputShape = {
   idempotencyKey: z.string().trim().min(8).max(200).optional().describe('Stable key to prevent duplicate specialist execution.'),
 };
 
+const localPlanInputShape = {
+  objective: z.string().trim().min(1).max(50_000),
+  context: z.string().trim().max(50_000).optional(),
+  workspaceId: z.string().trim().min(1).max(120).optional(),
+  operations: z.array(z.object({
+    toolId: z.enum(['filesystem.read', 'filesystem.write', 'powershell.execute', 'runtime.inspect', 'scheduled-task.manage']),
+    input: z.record(z.string(), z.unknown()),
+  })).min(1).max(20),
+  readPaths: z.array(z.string().trim().min(1).max(1_000)).min(1).max(100),
+  writePaths: z.array(z.string().trim().min(1).max(1_000)).min(1).max(100),
+  outputLanguage: z.enum(['vi', 'en']).optional(),
+  timeoutSeconds: z.number().int().min(10).max(1_800).optional(),
+  idempotencyKey: z.string().trim().min(8).max(200).optional(),
+  approvalTtlSeconds: z.number().int().min(30).max(900).optional(),
+};
+
 export function createMcpServer(service: DelegationService, config: BridgeConfig): McpServer {
   const workspaceCapabilities = service.workspaces.list();
   const localReadAvailable = config.localExecutor.enabled
@@ -52,7 +68,7 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
 
   const server = new McpServer({
     name: 'system-ai-workflow-delegation-bridge',
-    version: '0.1.0',
+    version: '0.2.0',
   }, {
     instructions: [
       'ChatGPT is the primary brain and owns the conversation, context, follow-ups, approvals, and final answer.',
@@ -61,7 +77,8 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
       'Select the target by choosing the explicit MCP tool. There is no backend router or Manager Agent.',
       'AI specialist tools are read-only and return analysis, plans, or proposals to ChatGPT. They never mutate the user workspace.',
       'Treat delegated output as evidence or advice to evaluate, not as an automatic final answer.',
-      'Only an explicitly published local executor tool can mutate allowlisted resources, and mutating calls require user-facing confirmation.',
+      'Local mutation requires a two-step sequence: prepare_local_operations validates and hash-binds the exact plan; ChatGPT shows the plan and obtains explicit user approval; execute_local_operations accepts only the single-use approval ID and plan hash.',
+      'Never ask the user to approve a vague objective. Approval must refer to the exact plan summary returned by prepare_local_operations.',
       'The local runtime executor is not an AI specialist and must never be described as Hermes or another model.',
       'A capability that is disabled by server or workspace policy is not published as an MCP tool.',
     ].join(' '),
@@ -73,11 +90,7 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
       title: 'Check delegation availability',
       description: 'Use only to verify which specialist and local capabilities are available. This does not answer user questions and does not create a task.',
       inputSchema: {},
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: false,
-      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     async () => {
       const health = await service.health();
@@ -96,15 +109,11 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
         description: [
           'Call only when ChatGPT intentionally needs Codex-specific repository expertise.',
           'Codex is strictly read-only and returns analysis, an implementation plan, or a proposed unified diff to ChatGPT.',
-          'Codex never applies changes. Any later mutation must use a separate approved local execution tool.',
+          'Codex never applies changes. Any later mutation must use the separate controlled local execution tools.',
           'Do not use this tool for weather, web research, email, calendar, general writing, or questions ChatGPT can answer directly.',
         ].join(' '),
         inputSchema: codexInputShape,
-        annotations: {
-          readOnlyHint: true,
-          destructiveHint: false,
-          openWorldHint: false,
-        },
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       },
       async (input) => resultForModel(await service.askCodex(input)),
     );
@@ -126,11 +135,7 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
           cwd: z.string().trim().min(1).max(1_000).optional(),
           idempotencyKey: z.string().trim().min(8).max(200).optional(),
         },
-        annotations: {
-          readOnlyHint: true,
-          destructiveHint: false,
-          openWorldHint: false,
-        },
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       },
       async (input) => resultForModel(await service.inspectLocalRuntime(input)),
     );
@@ -138,37 +143,49 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
 
   if (localWriteAvailable) {
     server.registerTool(
+      'prepare_local_operations',
+      {
+        title: 'Validate and prepare an exact local-operation plan for approval',
+        description: [
+          'Validate the complete bounded operation plan without mutating anything.',
+          'Returns a single-use approvalId, planHash, expiry, and safe plan summary.',
+          'ChatGPT must show the exact returned plan summary to the user and obtain explicit approval before execution.',
+          'Do not treat a successful prepare call as permission to execute.',
+        ].join(' '),
+        inputSchema: localPlanInputShape,
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async (input) => resultForModel(await service.prepareLocalOperations(input)),
+    );
+
+    server.registerTool(
       'execute_local_operations',
       {
-        title: 'Execute bounded local operations',
+        title: 'Execute one exact approved local-operation plan',
         description: [
-          'Call only after explicit user approval for the exact bounded local operations.',
-          'Every operation, read path, and write path must be supplied explicitly.',
-          'This is a controlled executor, not an AI specialist.',
-          'Do not use this tool for general questions or tasks ChatGPT can perform directly.',
+          'Call only after the user explicitly approves the exact plan summary returned by prepare_local_operations.',
+          'This tool accepts no operation payload and cannot alter the approved plan.',
+          'The approval is ephemeral, hash-bound, single-use, and consumed before execution.',
+          'A retry must reuse the same idempotencyKey; a changed or expired plan requires a new prepare call and new approval.',
         ].join(' '),
         inputSchema: {
-          objective: z.string().trim().min(1).max(50_000),
-          context: z.string().trim().max(50_000).optional(),
-          workspaceId: z.string().trim().min(1).max(120).optional(),
-          operations: z.array(z.object({
-            toolId: z.enum(['filesystem.read', 'filesystem.write', 'powershell.execute', 'runtime.inspect', 'scheduled-task.manage']),
-            input: z.record(z.string(), z.unknown()),
-          })).min(1).max(20),
-          readPaths: z.array(z.string().trim().min(1).max(1_000)).min(1).max(100),
-          writePaths: z.array(z.string().trim().min(1).max(1_000)).min(1).max(100),
-          outputLanguage: z.enum(['vi', 'en']).optional(),
-          timeoutSeconds: z.number().int().min(10).max(1_800).optional(),
-          idempotencyKey: z.string().trim().min(8).max(200).optional(),
+          approvalId: z.string().uuid(),
+          planHash: z.string().regex(/^[a-f0-9]{64}$/),
+          idempotencyKey: z.string().trim().min(8).max(200),
         },
         annotations: {
           readOnlyHint: false,
           destructiveHint: true,
-          idempotentHint: false,
+          idempotentHint: true,
           openWorldHint: false,
         },
       },
-      async (input) => resultForModel(await service.executeLocalOperations(input)),
+      async (input) => resultForModel(await service.executeApprovedLocalOperations(input)),
     );
   }
 
@@ -190,11 +207,7 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
           timeoutSeconds: z.number().int().min(10).max(600).optional(),
           idempotencyKey: z.string().trim().min(8).max(200).optional(),
         },
-        annotations: {
-          readOnlyHint: true,
-          destructiveHint: false,
-          openWorldHint: true,
-        },
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
       },
       async (input) => resultForModel(await service.askSpecialist(input)),
     );

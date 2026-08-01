@@ -6,8 +6,8 @@ import { z } from 'zod';
 import type { BridgeConfig } from '../config.js';
 import type {
   DelegationResult,
-  LocalExecuteInput,
   LocalInspectInput,
+  LocalOperationPlan,
   WorkspaceRegistration,
 } from '../contracts.js';
 import { runProcess } from '../host/process-runner.js';
@@ -108,9 +108,29 @@ export class LocalExecutor {
     }
   }
 
+  async validatePlan(
+    workspace: WorkspaceRegistration,
+    input: LocalOperationPlan,
+  ): Promise<Record<string, unknown>> {
+    if (!this.config.localExecutor.enabled) throw new Error('Local runtime execution is disabled.');
+    if (!workspace.allowLocalWrite) throw new Error('Local write access is not allowed for this workspace.');
+    const operations: Array<Record<string, unknown>> = [];
+    for (const operation of input.operations) {
+      operations.push(await this.validateOperation(workspace, input, operation.toolId, operation.input));
+    }
+    return sanitizeObject({
+      objective: input.objective,
+      workspaceId: workspace.workspaceId,
+      operationCount: operations.length,
+      operations,
+      readPaths: input.readPaths,
+      writePaths: input.writePaths,
+    }, this.config.maxOutputBytes);
+  }
+
   async execute(
     workspace: WorkspaceRegistration,
-    input: LocalExecuteInput,
+    input: LocalOperationPlan,
   ): Promise<DelegationResult> {
     const requestId = input.idempotencyKey ?? `LOCAL-${randomUUID()}`;
     if (!this.config.localExecutor.enabled) {
@@ -121,6 +141,7 @@ export class LocalExecutor {
     }
     const outputs: Array<Record<string, unknown>> = [];
     try {
+      await this.validatePlan(workspace, input);
       for (const operation of input.operations) {
         outputs.push(await this.executeOperation(workspace, input, operation.toolId, operation.input));
       }
@@ -129,7 +150,7 @@ export class LocalExecutor {
         requestId,
         target: 'LOCAL_EXECUTOR',
         status: 'SUCCEEDED',
-        summary: `The local executor completed ${outputs.length} explicitly approved bounded operation(s).`,
+        summary: `The local executor completed ${outputs.length} approved bounded operation(s).`,
         result: safe,
         warnings: [],
         evidence: [evidence(safe)],
@@ -151,14 +172,69 @@ export class LocalExecutor {
       enabled: this.config.localExecutor.enabled,
       ready: this.config.localExecutor.enabled,
       mode: 'DIRECT_BOUNDED_HOST_EXECUTION',
+      approvalMode: 'EPHEMERAL_SINGLE_USE_PLAN_HASH',
       platform: process.platform,
     };
   }
 
+  private async validateOperation(
+    workspace: WorkspaceRegistration,
+    request: LocalOperationPlan,
+    toolId: LocalOperationPlan['operations'][number]['toolId'],
+    rawInput: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    switch (toolId) {
+      case 'filesystem.read': {
+        const input = FileReadSchema.parse(rawInput);
+        const path = this.registry.resolveReadPath(workspace, input.path);
+        this.assertDeclaredScope(path, request.readPaths, workspace, 'read');
+        const info = await stat(path);
+        if (!info.isFile()) throw new Error(`Read target is not a file: ${input.path}`);
+        if (info.size > this.config.maxOutputBytes) throw new Error(`File exceeds bridge output limit: ${input.path}`);
+        return { toolId, path: input.path, encoding: input.encoding, sizeBytes: info.size };
+      }
+      case 'filesystem.write': {
+        const input = FileWriteSchema.parse(rawInput);
+        const path = this.registry.resolveWritePath(workspace, input.path);
+        this.assertDeclaredScope(path, request.writePaths, workspace, 'write');
+        const data = Buffer.from(input.content, input.encoding === 'base64' ? 'base64' : 'utf8');
+        if (data.length > this.config.maxOutputBytes) throw new Error(`Write payload exceeds bridge limit: ${input.path}`);
+        return {
+          toolId,
+          path: input.path,
+          bytesToWrite: data.length,
+          sha256: createHash('sha256').update(data).digest('hex'),
+          createDirectories: input.createDirectories,
+        };
+      }
+      case 'powershell.execute': {
+        if (process.platform !== 'win32') throw new Error('PowerShell execution requires Windows.');
+        const input = PowerShellSchema.parse(rawInput);
+        const scriptPath = this.registry.assertScript(workspace, input.scriptPath);
+        this.assertDeclaredScope(scriptPath, request.readPaths, workspace, 'read');
+        const cwd = input.cwd ? this.registry.resolveReadPath(workspace, input.cwd) : workspace.root;
+        this.assertDeclaredScope(cwd, request.readPaths, workspace, 'read');
+        const executableName = workspace.allowedExecutables.includes('pwsh.exe') ? 'pwsh.exe' : 'powershell.exe';
+        this.registry.assertExecutable(workspace, executableName);
+        return { toolId, scriptPath: input.scriptPath, args: input.args, cwd: input.cwd ?? '.', timeoutMs: input.timeoutMs ?? this.config.defaultTimeoutSeconds * 1_000 };
+      }
+      case 'runtime.inspect': {
+        const input = InspectSchema.parse(rawInput);
+        this.validateInspect(workspace, input);
+        return { toolId, ...input };
+      }
+      case 'scheduled-task.manage': {
+        const input = ScheduledTaskSchema.parse(rawInput);
+        this.validateScheduledTask(workspace, input);
+        return { toolId, ...input };
+      }
+    }
+  }
+
   private async executeOperation(
     workspace: WorkspaceRegistration,
-    request: LocalExecuteInput,
-    toolId: LocalExecuteInput['operations'][number]['toolId'],
+    request: LocalOperationPlan,
+    toolId: LocalOperationPlan['operations'][number]['toolId'],
     rawInput: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     switch (toolId) {
@@ -204,14 +280,9 @@ export class LocalExecutor {
         };
       }
       case 'powershell.execute': {
-        if (process.platform !== 'win32') throw new Error('PowerShell execution requires Windows.');
         const input = PowerShellSchema.parse(rawInput);
         const scriptPath = this.registry.assertScript(workspace, input.scriptPath);
-        this.assertDeclaredScope(scriptPath, request.readPaths, workspace, 'read');
-        const cwd = input.cwd
-          ? this.registry.resolveReadPath(workspace, input.cwd)
-          : workspace.root;
-        this.assertDeclaredScope(cwd, request.readPaths, workspace, 'read');
+        const cwd = input.cwd ? this.registry.resolveReadPath(workspace, input.cwd) : workspace.root;
         const executableName = workspace.allowedExecutables.includes('pwsh.exe') ? 'pwsh.exe' : 'powershell.exe';
         const executable = this.registry.assertExecutable(workspace, executableName);
         const result = await runProcess({
@@ -223,13 +294,27 @@ export class LocalExecutor {
         });
         return { toolId, ok: result.exitCode === 0 && !result.timedOut, scriptPath: input.scriptPath, result };
       }
-      case 'runtime.inspect': {
-        const input = InspectSchema.parse(rawInput);
-        return this.inspectInternal(workspace, input);
-      }
+      case 'runtime.inspect':
+        return this.inspectInternal(workspace, InspectSchema.parse(rawInput));
       case 'scheduled-task.manage':
         return this.manageScheduledTask(workspace, ScheduledTaskSchema.parse(rawInput));
     }
+  }
+
+  private validateInspect(workspace: WorkspaceRegistration, input: z.infer<typeof InspectSchema>): void {
+    if (input.kind === 'system') return;
+    if (input.cwd) this.registry.resolveReadPath(workspace, input.cwd);
+    if (input.kind === 'git') {
+      this.registry.assertExecutable(workspace, process.platform === 'win32' ? 'git.exe' : 'git');
+      return;
+    }
+    if (input.kind === 'docker') {
+      this.registry.assertExecutable(workspace, process.platform === 'win32' ? 'docker.exe' : 'docker');
+      return;
+    }
+    if (process.platform !== 'win32') throw new Error(`${input.kind} inspection requires Windows.`);
+    const executableName = workspace.allowedExecutables.includes('pwsh.exe') ? 'pwsh.exe' : 'powershell.exe';
+    this.registry.assertExecutable(workspace, executableName);
   }
 
   private async inspectInternal(
@@ -249,13 +334,9 @@ export class LocalExecutor {
         freeMemory: freemem(),
       };
     }
-    const cwd = input.cwd
-      ? this.registry.resolveReadPath(workspace, input.cwd)
-      : workspace.root;
-
+    const cwd = input.cwd ? this.registry.resolveReadPath(workspace, input.cwd) : workspace.root;
     if (input.kind === 'git') {
-      const executableName = process.platform === 'win32' ? 'git.exe' : 'git';
-      const executable = this.registry.assertExecutable(workspace, executableName);
+      const executable = this.registry.assertExecutable(workspace, process.platform === 'win32' ? 'git.exe' : 'git');
       const [head, status] = await Promise.all([
         runProcess({ executable, args: ['rev-parse', 'HEAD'], cwd, timeoutMs: 30_000, maxOutputBytes: this.config.maxOutputBytes }),
         runProcess({ executable, args: ['status', '--porcelain=v1'], cwd, timeoutMs: 30_000, maxOutputBytes: this.config.maxOutputBytes }),
@@ -263,15 +344,13 @@ export class LocalExecutor {
       return { toolId: 'runtime.inspect', ok: head.exitCode === 0 && status.exitCode === 0, kind: 'git', head, status };
     }
     if (input.kind === 'docker') {
-      const executableName = process.platform === 'win32' ? 'docker.exe' : 'docker';
-      const executable = this.registry.assertExecutable(workspace, executableName);
+      const executable = this.registry.assertExecutable(workspace, process.platform === 'win32' ? 'docker.exe' : 'docker');
       const [version, compose] = await Promise.all([
         runProcess({ executable, args: ['version', '--format', '{{json .}}'], cwd, timeoutMs: 30_000, maxOutputBytes: this.config.maxOutputBytes }),
         runProcess({ executable, args: ['compose', 'version'], cwd, timeoutMs: 30_000, maxOutputBytes: this.config.maxOutputBytes }),
       ]);
       return { toolId: 'runtime.inspect', ok: version.exitCode === 0 && compose.exitCode === 0, kind: 'docker', version, compose };
     }
-    if (process.platform !== 'win32') throw new Error(`${input.kind} inspection requires Windows.`);
     const executableName = workspace.allowedExecutables.includes('pwsh.exe') ? 'pwsh.exe' : 'powershell.exe';
     const executable = this.registry.assertExecutable(workspace, executableName);
     const names = input.names.map(quotePowerShell).join(',');
@@ -290,12 +369,21 @@ export class LocalExecutor {
     return { toolId: 'runtime.inspect', ok: result.exitCode === 0, kind: input.kind, result };
   }
 
+  private validateScheduledTask(workspace: WorkspaceRegistration, input: z.infer<typeof ScheduledTaskSchema>): void {
+    if (process.platform !== 'win32') throw new Error('Scheduled Task management requires Windows.');
+    this.registry.assertScheduledTask(workspace, input.taskName);
+    this.registry.assertExecutable(workspace, 'schtasks.exe');
+    if (input.operation === 'create') {
+      if (!input.executable || !input.schedule) throw new Error('Create requires executable and schedule.');
+      this.registry.assertExecutable(workspace, input.executable);
+    }
+  }
+
   private async manageScheduledTask(
     workspace: WorkspaceRegistration,
     input: z.infer<typeof ScheduledTaskSchema>,
   ): Promise<Record<string, unknown>> {
-    if (process.platform !== 'win32') throw new Error('Scheduled Task management requires Windows.');
-    this.registry.assertScheduledTask(workspace, input.taskName);
+    this.validateScheduledTask(workspace, input);
     const schtasks = this.registry.assertExecutable(workspace, 'schtasks.exe');
     const args = ['/TN', input.taskName];
     if (input.operation === 'query') args.unshift('/Query');
@@ -303,12 +391,11 @@ export class LocalExecutor {
     if (input.operation === 'end') args.unshift('/End');
     if (input.operation === 'delete') args.unshift('/Delete', '/F');
     if (input.operation === 'create') {
-      if (!input.executable || !input.schedule) throw new Error('Create requires executable and schedule.');
-      const targetExecutable = this.registry.assertExecutable(workspace, input.executable);
+      const targetExecutable = this.registry.assertExecutable(workspace, input.executable ?? '');
       const command = [targetExecutable, ...input.args]
         .map((part) => `"${part.replaceAll('"', '\\"')}"`)
         .join(' ');
-      args.unshift('/Create', '/F', '/TR', command, '/SC', input.schedule);
+      args.unshift('/Create', '/F', '/TR', command, '/SC', input.schedule ?? 'ONLOGON');
       if (input.modifier) args.push('/MO', String(input.modifier));
       if (input.startTime) args.push('/ST', input.startTime);
     }
@@ -319,13 +406,7 @@ export class LocalExecutor {
       timeoutMs: this.config.defaultTimeoutSeconds * 1_000,
       maxOutputBytes: this.config.maxOutputBytes,
     });
-    return {
-      toolId: 'scheduled-task.manage',
-      ok: result.exitCode === 0,
-      operation: input.operation,
-      taskName: input.taskName,
-      result,
-    };
+    return { toolId: 'scheduled-task.manage', ok: result.exitCode === 0, operation: input.operation, taskName: input.taskName, result };
   }
 
   private assertDeclaredScope(

@@ -47,10 +47,20 @@ export const LocalToolCallSchema = z.object({
   input: z.record(z.string(), z.unknown()),
 });
 
-export const LocalExecuteInputSchema = CommonDelegationSchema.extend({
+export const LocalOperationPlanSchema = CommonDelegationSchema.extend({
   operations: z.array(LocalToolCallSchema).min(1).max(20),
   readPaths: z.array(z.string().trim().min(1).max(1_000)).min(1).max(100),
   writePaths: z.array(z.string().trim().min(1).max(1_000)).min(1).max(100),
+});
+
+export const PrepareLocalOperationsInputSchema = LocalOperationPlanSchema.extend({
+  approvalTtlSeconds: z.number().int().min(30).max(900).optional(),
+});
+
+export const ExecuteApprovedLocalOperationsInputSchema = z.object({
+  approvalId: z.string().uuid(),
+  planHash: z.string().regex(/^[a-f0-9]{64}$/),
+  idempotencyKey: z.string().trim().min(8).max(200),
 });
 
 export const SpecialistDelegationInputSchema = z.object({
@@ -84,6 +94,8 @@ export type WorkspaceRegistration = z.infer<typeof WorkspaceRegistrationSchema>;
 export type WorkspaceRegistryDocument = z.infer<typeof WorkspaceRegistrySchema>;
 export type CodexDelegationInput = z.infer<typeof CodexDelegationInputSchema>;
 export type LocalInspectInput = z.infer<typeof LocalInspectInputSchema>;
-export type LocalExecuteInput = z.infer<typeof LocalExecuteInputSchema>;
+export type LocalOperationPlan = z.infer<typeof LocalOperationPlanSchema>;
+export type PrepareLocalOperationsInput = z.infer<typeof PrepareLocalOperationsInputSchema>;
+export type ExecuteApprovedLocalOperationsInput = z.infer<typeof ExecuteApprovedLocalOperationsInputSchema>;
 export type SpecialistDelegationInput = z.infer<typeof SpecialistDelegationInputSchema>;
 export type DelegationResult = z.infer<typeof DelegationResultSchema>;

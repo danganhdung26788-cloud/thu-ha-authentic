@@ -17,6 +17,7 @@ async function listedTools(allowLocalWrite: boolean): Promise<string[]> {
     MCP_AUTH_MODE: 'none',
     CODEX_ENABLED: 'false',
     LOCAL_EXECUTOR_ENABLED: 'true',
+    LOCAL_APPROVAL_TTL_SECONDS: '300',
     SPECIALIST_AGENT_ENABLED: 'false',
   });
   const workspaces = WorkspaceRegistry.fromDocument({
@@ -59,15 +60,17 @@ async function listedTools(allowLocalWrite: boolean): Promise<string[]> {
   }
 }
 
-test('read-only local policy publishes inspection but hides mutation', async () => {
+test('read-only local policy publishes inspection but hides both write tools', async () => {
   const names = await listedTools(false);
   assert.ok(names.includes('delegation_health'));
   assert.ok(names.includes('inspect_local_runtime'));
+  assert.equal(names.includes('prepare_local_operations'), false);
   assert.equal(names.includes('execute_local_operations'), false);
 });
 
-test('write tool is published only after explicit workspace write policy', async () => {
+test('write policy publishes prepare and execute as a two-step pair', async () => {
   const names = await listedTools(true);
   assert.ok(names.includes('inspect_local_runtime'));
+  assert.ok(names.includes('prepare_local_operations'));
   assert.ok(names.includes('execute_local_operations'));
 });

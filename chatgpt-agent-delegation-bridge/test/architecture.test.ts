@@ -3,7 +3,8 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   CodexDelegationInputSchema,
-  LocalExecuteInputSchema,
+  ExecuteApprovedLocalOperationsInputSchema,
+  PrepareLocalOperationsInputSchema,
 } from '../src/contracts.js';
 import { WorkspaceRegistry } from '../src/workspace-registry.js';
 
@@ -20,7 +21,7 @@ test('delegation inputs cannot select or override specialist target', () => {
   });
   assert.equal('target' in codex, false);
 
-  const local = LocalExecuteInputSchema.parse({
+  const local = PrepareLocalOperationsInputSchema.parse({
     objective: 'Write an approved file.',
     operations: [{ toolId: 'filesystem.write', input: { path: 'a.txt', content: 'a' } }],
     readPaths: ['.'],
@@ -28,6 +29,14 @@ test('delegation inputs cannot select or override specialist target', () => {
     target: 'CODEX',
   });
   assert.equal('target' in local, false);
+
+  const execute = ExecuteApprovedLocalOperationsInputSchema.parse({
+    approvalId: '123e4567-e89b-42d3-a456-426614174000',
+    planHash: 'a'.repeat(64),
+    idempotencyKey: 'execute-001',
+    operations: [{ toolId: 'filesystem.write', input: { path: 'changed.txt' } }],
+  });
+  assert.equal('operations' in execute, false);
 });
 
 test('workspace registry rejects unregistered workspaces and path escape', () => {
@@ -65,12 +74,16 @@ test('new bridge contains no replacement UI, business database, queue, or backen
   assert.match(combined, /ChatGPT remains responsible|ChatGPT primary brain/iu);
 });
 
-test('specialist AI tools are read-only while local mutation is separate and approval annotated', async () => {
+test('specialist AI tools are read-only and local mutation requires two-step approval', async () => {
   const mcp = await source('src/mcp-server.ts');
   assert.match(mcp, /'ask_codex'[\s\S]*?readOnlyHint:\s*true/);
   assert.doesNotMatch(mcp, /'execute_codex'/);
   assert.match(mcp, /'inspect_local_runtime'[\s\S]*?readOnlyHint:\s*true/);
+  assert.match(mcp, /'prepare_local_operations'[\s\S]*?readOnlyHint:\s*true/);
   assert.match(mcp, /'execute_local_operations'[\s\S]*?destructiveHint:\s*true/);
+  assert.match(mcp, /approvalId:\s*z\.string\(\)\.uuid\(\)/);
+  assert.match(mcp, /planHash:\s*z\.string\(\)\.regex/);
+  assert.match(mcp, /accepts no operation payload/iu);
   assert.match(mcp, /AI specialist tools are read-only/);
 });
 
