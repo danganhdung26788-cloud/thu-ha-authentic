@@ -40,7 +40,7 @@ export class DelegationService {
   async askCodex(raw: unknown): Promise<DelegationResult> {
     const input = CodexDelegationInputSchema.parse(raw);
     const workspace = this.workspaces.get(input.workspaceId);
-    for (const path of input.paths) this.workspaces.resolveReadPath(workspace, path);
+    for (const path of input.paths) this.workspaces.resolvePath(workspace, path);
     return this.deduplicate(
       'ask_codex',
       input.idempotencyKey,
@@ -95,6 +95,7 @@ export class DelegationService {
         codex: {
           enabled: this.config.codex.enabled,
           mode: 'READ_ONLY_PROPOSAL',
+          readBoundary: 'REGISTERED_WORKSPACE_ROOT',
         },
         localExecutor: this.#localExecutor.health(),
         specialistAgent: {
