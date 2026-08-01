@@ -8,9 +8,10 @@ import { AgentRegistryStore } from '../registry/agent-registry.js';
 async function resolveManagerModel(): Promise<string> {
   const registered = await new AgentRegistryStore().get('manager');
   if (registered?.status !== 'ACTIVE') throw new Error('Manager Agent is not ACTIVE.');
-  const model = registered.model?.trim()
-    || getEnv().MANAGER_MODEL.trim()
-    || getEnv().OPENAI_MANAGER_MODEL?.trim();
+  const env = getEnv();
+  const model = env.MANAGER_MODEL.trim()
+    || env.OPENAI_MANAGER_MODEL?.trim()
+    || registered.model?.trim();
   if (!model) throw new Error('Manager model is not configured.');
   return model;
 }
