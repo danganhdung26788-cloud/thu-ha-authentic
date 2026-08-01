@@ -1,93 +1,117 @@
-# Runbook — Windows Runtime Activation
+# Runbook — Windows runtime activation
 
-## Status boundary
+This document covers the technical Windows runtime. The complete user-facing deployment and acceptance procedure is:
 
-This runbook deploys Workflow AI V2 in parallel. It does not stop, modify or delete V1.
+```text
+docs/RUNBOOK_CHAT_FIRST_LOCAL_MANAGER.md
+```
+
+## Safety boundary
 
 ```text
 INITIAL_PHASE=V1_ONLY
-GEMINI_RUNTIME=DISABLED
-GOOGLE_API_KEY=EMPTY
+V1_RUNTIME_CHANGED=FALSE
 V1_DELETION_ALLOWED=FALSE
+MODEL_PROVIDER=ollama
+OPENAI_API_KEY=EMPTY
+GOOGLE_API_KEY=EMPTY
+OPENAI_API_COST=0
+GEMINI_API_COST=0
 ```
 
-## Components
+The default runtime uses a local Ollama Manager through the OpenAI-compatible provider contract. OpenAI credentials are not required unless the owner explicitly changes `MODEL_PROVIDER=openai` through a separate cost-approved change.
 
-- Docker Desktop: PostgreSQL, Redis, MinIO, API and worker.
-- Internal operations dashboard: `http://127.0.0.1:3100/admin`.
-- Windows host adapter 3201: Hermes bounded executor.
-- Windows host adapter 3202: Codex SDK executor.
-- Scheduled Tasks:
-  - `Hermes-V2-Hermes-HostAdapter`
-  - `Hermes-V2-Codex-HostAdapter`
-- Secrets and workspace registry are local files ignored by Git.
+## Runtime components
+
+Docker Compose:
+
+- PostgreSQL;
+- Redis;
+- MinIO;
+- Ollama;
+- one-time Ollama model pull;
+- migrations;
+- API;
+- worker.
+
+Windows host components:
+
+- Hermes adapter on TCP 3201;
+- Codex adapter on TCP 3202;
+- `Hermes-V2-Hermes-HostAdapter`;
+- `Hermes-V2-Codex-HostAdapter`;
+- `Hermes-V2-ChatApp`;
+- Desktop and Start Menu **Workflow AI** shortcuts.
+
+Product surfaces:
+
+```text
+http://127.0.0.1:3100/app    normal chat use
+http://127.0.0.1:3100/admin  technical administration
+```
 
 ## Prerequisites
 
-- Windows 11.
-- Node.js 22+ and npm 11+.
-- Docker Desktop engine running.
-- Git installed.
-- Codex signed in on the Windows user that runs the Scheduled Task.
-- The repository checked out locally on `main` after PR merge.
+- Windows 11;
+- Node.js 22+ and npm 11+;
+- Docker Desktop;
+- Git;
+- local Codex sign-in for the Windows user running the adapter task;
+- repository updated to the merged chat-first commit;
+- local disk space for containers, the model, evidence, attachments, and backups.
 
-The host adapters use `0.0.0.0` so Docker can reach them through `host.docker.internal`. Bearer authentication, owner/workspace checks and the Windows Firewall gate remain mandatory.
+The host adapters bind so Docker can reach them through `host.docker.internal`. Bearer authentication, workspace registration, allowlists, and exact owner/workspace/scope authorization remain mandatory.
 
-## Deployment modes
+## One-time activation
 
-### Infrastructure only
-
-Use this mode before OpenAI credentials/models are configured:
-
-```powershell
-Set-Location <repository>\agent-workflow-platform-v2
-.\scripts\windows\Deploy-AgentV2.ps1 -InfrastructureOnly
-```
-
-This starts PostgreSQL, Redis, MinIO, API, worker and both host adapters, then runs smoke tests. AI task execution remains intentionally inactive. Shadow cannot be entered in this mode.
-
-### Live AI runtime
-
-Configure these local `.env` values first:
-
-```text
-OPENAI_API_KEY
-OPENAI_MANAGER_MODEL
-OPENAI_SPECIALIST_MODEL
-```
-
-Then run:
+From `agent-workflow-platform-v2`:
 
 ```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 .\scripts\windows\Deploy-AgentV2.ps1
 ```
 
-The deployment script rejects live activation when any required OpenAI value is empty.
+The default deployment:
 
-### Firewall change
+1. validates Node, npm, Git, and Docker;
+2. creates random local secrets when `.env` is absent;
+3. configures Ollama and `qwen3:4b` by default;
+4. leaves OpenAI, Gemini, and Canva cloud secrets empty;
+5. installs the exact lockfile;
+6. runs type-check, tests, and build;
+7. checks Codex availability;
+8. starts the isolated Compose topology;
+9. downloads the configured local model;
+10. registers Hermes/Codex Scheduled Tasks;
+11. installs hidden chat startup and shortcuts;
+12. runs chat-first smoke tests;
+13. runs the 100-case Vietnamese routing benchmark.
 
-Run in an elevated PowerShell only when explicitly approving the firewall change:
+Do not use `-EnterShadow` during initial activation.
+
+## Infrastructure-only mode
+
+```powershell
+.\scripts\windows\Deploy-AgentV2.ps1 -InfrastructureOnly
+```
+
+This mode may start the local model and infrastructure, but it intentionally skips the live routing acceptance gate. Normal UAT and Shadow remain blocked.
+
+## Explicit benchmark bypass
+
+`-SkipRoutingBenchmark` exists only for technical diagnosis. A deployment using it is not accepted for normal UAT or Shadow.
+
+Do not lower benchmark thresholds to make an unsuitable model pass.
+
+## Firewall change
+
+Firewall modification is a separate deep-intervention gate:
 
 ```powershell
 .\scripts\windows\Deploy-AgentV2.ps1 -ConfigureFirewall
 ```
 
-The firewall rules allow ports 3201 and 3202 from `LocalSubnet` on Domain/Private profiles only. Public profile is not opened.
-
-## What deployment performs
-
-1. verifies Node, npm, Git and Docker;
-2. creates random local secrets when `.env` is absent;
-3. keeps Gemini and Canva API settings empty;
-4. validates live OpenAI configuration unless `-InfrastructureOnly` is used;
-5. installs the exact lockfile;
-6. runs type-check, tests and build;
-7. checks Codex CLI availability;
-8. starts the isolated Docker topology;
-9. registers hidden host-adapter Scheduled Tasks;
-10. runs health/readiness smoke tests.
-
-It does not automatically enter Shadow unless `-EnterShadow` is supplied. `-EnterShadow` is blocked in infrastructure-only mode.
+Rules are limited to the approved local/private scope. Public exposure is not part of the default deployment.
 
 ## Workspace registry
 
@@ -97,103 +121,102 @@ Local file:
 runtime/workspaces.json
 ```
 
-Every entry binds:
+Every workspace binds:
 
 - owner ID;
 - workspace ID;
-- workspace root;
+- root;
 - read roots;
 - write roots;
 - executable allowlist;
 - script allowlist;
 - Scheduled Task prefix.
 
-No fallback workspace exists. An unregistered owner/workspace is denied.
+There is no fallback workspace. Unknown owner/workspace combinations are denied.
 
-## Hermes execution policy
+## Hermes policy
 
-Hermes does not accept arbitrary inline shell.
+Hermes accepts only registered tools and allowlisted script files:
 
-Allowed tool calls:
+```text
+filesystem.read
+filesystem.write
+powershell.execute
+runtime.inspect
+scheduled-task.manage
+```
 
-- `filesystem.read`
-- `filesystem.write`
-- `powershell.execute` for allowlisted script files only
-- `runtime.inspect`
-- `scheduled-task.manage` using the `Hermes-V2-` prefix
+Inline arbitrary PowerShell is forbidden. File writes require authorized scope and target read-back. Final receipts are idempotent; retryable failures are not cached as successful final results.
 
-Every file operation is checked against both the persistent workspace registry and the task `READ_SCOPE`/`WRITE_SCOPE`. Writes use target read-back.
+## Codex policy
 
-Host results are stored as idempotent receipts by owner/workspace/task only when the result is final. Retryable failures are not persisted as final receipts, so the control plane may safely retry them.
-
-## Codex execution policy
-
-Codex uses the official TypeScript SDK and the local Codex login.
+Codex uses the official TypeScript SDK and local Codex login.
 
 Defaults:
 
 ```text
 sandboxMode=workspace-write
-approvalPolicy=never
+approvalPolicy=never after V2 Approval Gate
 networkAccessEnabled=false
 webSearchMode=disabled
 ```
 
-The V2 policy and Approval Gate run before Codex receives a task. Codex is not permitted to change credentials, permissions, billing, repository visibility, operating-system settings or Git history through a normal Sandbox/UAT task.
+Normal Sandbox/UAT tasks cannot change credentials, permissions, billing, repository visibility, deep operating-system settings, or Git history.
 
 ## Verification
 
 ```powershell
 .\scripts\windows\Test-AgentV2.ps1
+.\scripts\windows\Test-LocalManagerRouting.ps1
 ```
 
-Acceptance:
+Acceptance requires:
 
-- API `/health` PASS;
-- API `/ready` PASS;
-- PostgreSQL, Redis and MinIO PASS;
-- API container can reach every configured executor adapter;
-- Hermes adapter health/readiness PASS;
-- Codex adapter health/readiness PASS;
-- both Scheduled Tasks registered and enabled.
+- API health and readiness;
+- PostgreSQL, Redis, MinIO, and local model readiness;
+- Hermes and Codex adapter health/readiness;
+- chat page and signed session cookie;
+- three Scheduled Tasks registered and enabled;
+- Desktop and Start Menu shortcuts;
+- structured routing schema 100%;
+- routing accuracy at least 95%;
+- critical approval recall 100%;
+- clarification recall 100%;
+- registered tool validity 100%.
 
-The `/ready` endpoint fails when a configured host adapter cannot be reached from Docker. This prevents a false-positive deployment based only on localhost checks.
+## Normal operation
 
-## Operations dashboard
+The user opens **Workflow AI** and uses `/app`. PowerShell is not the daily interface.
 
-Open:
+The launcher:
+
+- starts Docker Desktop when required;
+- starts the Compose topology and adapters;
+- waits for local model readiness;
+- opens `/app`;
+- creates a sanitized startup diagnostic on failure.
+
+Startup diagnostic:
 
 ```text
-http://127.0.0.1:3100/admin
+runtime/diagnostics/startup-latest.txt
 ```
 
-Enter the local `API_AUTH_TOKEN`. The dashboard can:
+## Technical administration
 
-- create bounded tasks;
-- filter tasks by owner/workspace/status;
-- inspect executions, audit and evidence metadata;
-- approve or reject deep interventions;
-- display adapter health and cutover phase.
+`/admin` remains bearer-authenticated and intended for technical inspection, advanced audit, evidence, registry, adapter health, and cutover controls. The token remains outside the normal chat interface.
 
-The token is stored only in the current tab's `sessionStorage`.
+## Backup and restore
 
-## Backup
+Backup:
 
 ```powershell
 .\scripts\windows\Backup-AgentV2.ps1
 ```
 
-Artifacts:
+A complete chat-first backup includes PostgreSQL, MinIO, chat attachments, local configuration, Ollama model metadata, checksums, Git commit, and cutover phase.
 
-- PostgreSQL custom-format dump;
-- MinIO data archive;
-- local configuration copies;
-- SHA-256 manifest;
-- Git commit reference.
-
-## Restore
-
-Restore is a deep intervention and requires explicit confirmation:
+Restore requires explicit owner approval:
 
 ```powershell
 .\scripts\windows\Restore-AgentV2.ps1 `
@@ -202,39 +225,7 @@ Restore is a deep intervention and requires explicit confirmation:
   -Confirm
 ```
 
-The script verifies every checksum, stops API/worker, restores PostgreSQL and MinIO, restarts services and runs the smoke test.
-
-## Shadow activation
-
-After live AI deployment and backup PASS:
-
-```powershell
-.\scripts\windows\Start-AgentV2Shadow.ps1
-```
-
-Shadow rules:
-
-- V1 remains authoritative.
-- V2 cannot write to V1.
-- Compare normalized outputs and evidence.
-- Record mismatches before dual-run.
-
-## Cutover controls
-
-Use `Set-AgentV2Phase.ps1`. The server enforces sequential phases:
-
-```text
-V1_ONLY -> SHADOW -> DUAL_RUN -> V2_PRIMARY -> V1_DECOMMISSIONED
-```
-
-`V2_PRIMARY` requires verified backup, owner approval and a future rollback deadline.
-
-`V1_DECOMMISSIONED` requires:
-
-- 7/7 soak PASS;
-- expired rollback window;
-- verified backup;
-- owner approval.
+Restore verifies checksums, restores PostgreSQL/MinIO/chat attachments, restarts services, and runs the smoke test. Backups created before attachment coverage are incomplete for chat-first restore.
 
 ## Stop without deletion
 
@@ -242,15 +233,14 @@ V1_ONLY -> SHADOW -> DUAL_RUN -> V2_PRIMARY -> V1_DECOMMISSIONED
 .\scripts\windows\Stop-AgentV2.ps1
 ```
 
-This stops host adapters and Docker containers but preserves volumes and V1.
+This preserves data and V1. Never use `docker compose down -v` during rollback or diagnosis.
 
-## Rollback
+## Cutover
 
-During Shadow or dual-run:
+The sequential phases remain:
 
-1. transition V2 back one allowed phase;
-2. run `Stop-AgentV2.ps1` if needed;
-3. keep V1 active;
-4. preserve V2 logs, receipts, audit and evidence for analysis.
+```text
+V1_ONLY -> SHADOW -> DUAL_RUN -> V2_PRIMARY -> V1_DECOMMISSIONED
+```
 
-Never use `docker compose down -v` during rollback.
+The default activation does not enter Shadow. Shadow requires separate owner approval after local deployment, live benchmark, read-only UAT, clarification/approval/diagnostic UAT, attachment tests, complete backup/restore, and reboot/resume all pass.
