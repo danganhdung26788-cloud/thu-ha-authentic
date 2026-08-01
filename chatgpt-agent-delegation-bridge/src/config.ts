@@ -31,8 +31,6 @@ const EnvSchema = z.object({
   CODEX_NETWORK_ACCESS: booleanString('false'),
 
   HERMES_ENABLED: booleanString('false'),
-  HERMES_ADAPTER_URL: optionalString(),
-  HERMES_ADAPTER_TOKEN: optionalString(),
 
   SPECIALIST_AGENT_ENABLED: booleanString('false'),
   SPECIALIST_MODEL: optionalString(),
@@ -63,8 +61,6 @@ export type BridgeConfig = Readonly<{
   }>;
   hermes: Readonly<{
     enabled: boolean;
-    adapterUrl?: string;
-    adapterToken?: string;
   }>;
   specialist: Readonly<{
     enabled: boolean;
@@ -94,9 +90,6 @@ export function getConfig(source: NodeJS.ProcessEnv = process.env): BridgeConfig
   if (env.MCP_BIND !== '127.0.0.1' && env.MCP_BIND !== 'localhost' && env.MCP_AUTH_MODE === 'none') {
     throw new Error('Unauthenticated bridge may bind only to localhost.');
   }
-  if (env.HERMES_ENABLED && (!env.HERMES_ADAPTER_URL || !env.HERMES_ADAPTER_TOKEN)) {
-    throw new Error('Hermes requires HERMES_ADAPTER_URL and HERMES_ADAPTER_TOKEN.');
-  }
   if (env.SPECIALIST_AGENT_ENABLED && (!env.SPECIALIST_MODEL || !env.SPECIALIST_API_KEY)) {
     throw new Error('Agents SDK specialist requires explicit SPECIALIST_MODEL and SPECIALIST_API_KEY.');
   }
@@ -122,8 +115,6 @@ export function getConfig(source: NodeJS.ProcessEnv = process.env): BridgeConfig
     },
     hermes: {
       enabled: env.HERMES_ENABLED,
-      ...(env.HERMES_ADAPTER_URL ? { adapterUrl: env.HERMES_ADAPTER_URL } : {}),
-      ...(env.HERMES_ADAPTER_TOKEN ? { adapterToken: env.HERMES_ADAPTER_TOKEN } : {}),
     },
     specialist: {
       enabled: env.SPECIALIST_AGENT_ENABLED,
