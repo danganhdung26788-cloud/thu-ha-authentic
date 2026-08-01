@@ -7,6 +7,7 @@ import { ChatStore } from '../../chat/chat-store.js';
 import { compileChatTask, type AttachmentScope } from '../../chat/task-compiler.js';
 import type { ChatIdentity, ConversationSnapshot } from '../../chat/types.js';
 import { getEnv } from '../../config/env.js';
+import { redactSecrets } from '../../diagnostics/redaction.js';
 import { modelProviderHealthCheck } from '../../models/model-provider.js';
 import { PlatformService } from './platform.service.js';
 
@@ -93,6 +94,41 @@ function decodeBase64(value: string): Buffer {
   return content;
 }
 
+function record(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function safeApprovalAction(action: Record<string, unknown>): Record<string, unknown> {
+  const manager = record(action.manager);
+  const policy = record(action.policy);
+  const executor = typeof manager.executor === 'string' ? manager.executor : 'CHƯA_XÁC_ĐỊNH';
+  const nextAction = typeof manager.nextAction === 'string' ? manager.nextAction : 'Thao tác được bảo vệ.';
+  const reason = typeof policy.reason === 'string' ? policy.reason : 'Cần phê duyệt theo chính sách an toàn.';
+  const outcome = typeof policy.outcome === 'string' ? policy.outcome : 'REQUIRE_APPROVAL';
+  return {
+    manager: {
+      executor,
+      nextAction: redactSecrets(nextAction, 4_096).text,
+    },
+    policy: {
+      outcome,
+      reason: redactSecrets(reason, 4_096).text,
+    },
+  };
+}
+
+function sanitizeSnapshot(snapshot: ConversationSnapshot): ConversationSnapshot {
+  return {
+    ...snapshot,
+    approvals: snapshot.approvals.map((approval) => ({
+      ...approval,
+      action: safeApprovalAction(approval.action),
+    })),
+  };
+}
+
 @Injectable()
 export class ChatService {
   readonly #store = new ChatStore();
@@ -128,7 +164,7 @@ export class ChatService {
   }
 
   async getConversation(identity: ChatIdentity, conversationId: string): Promise<ConversationSnapshot> {
-    return this.#store.getSnapshot(identity, conversationId);
+    return sanitizeSnapshot(await this.#store.getSnapshot(identity, conversationId));
   }
 
   async uploadAttachment(
@@ -202,7 +238,7 @@ export class ChatService {
       clientMessageId,
       input.attachmentIds,
     );
-    if (userMessage.taskId) return this.#store.getSnapshot(identity, conversationId);
+    if (userMessage.taskId) return this.getConversation(identity, conversationId);
 
     const attachmentScopes: AttachmentScope[] = attachments.map((attachment) => ({
       attachmentId: attachment.attachmentId,
@@ -243,7 +279,7 @@ export class ChatService {
       percent: 5,
       metadata: { clientMessageId },
     });
-    return this.#store.getSnapshot(identity, conversationId);
+    return this.getConversation(identity, conversationId);
   }
 
   async answerClarification(
@@ -261,7 +297,7 @@ export class ChatService {
       `Đã nhận câu trả lời: ${input.answer}`,
       { clarificationId, acknowledgement: true },
     );
-    return this.#store.getSnapshot(identity, conversationId);
+    return this.getConversation(identity, conversationId);
   }
 
   async decideApproval(
@@ -290,6 +326,6 @@ export class ChatService {
       percent: input.decision === 'APPROVED' ? 45 : 100,
       metadata: { approvalId, reason: input.reason ?? null },
     });
-    return this.#store.getSnapshot(identity, conversationId);
+    return this.getConversation(identity, conversationId);
   }
 }
