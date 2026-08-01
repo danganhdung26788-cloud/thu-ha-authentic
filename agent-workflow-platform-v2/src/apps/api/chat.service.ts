@@ -34,7 +34,12 @@ const ApprovalDecisionSchema = z.object({
 const ALLOWED_EXTENSIONS = new Set([
   '.pdf', '.docx', '.xlsx', '.pptx', '.txt', '.md', '.csv',
   '.png', '.jpg', '.jpeg', '.webp', '.json', '.xml', '.yaml', '.yml',
-  '.zip', '.html', '.htm', '.js', '.ts', '.tsx', '.jsx', '.css', '.sql',
+  '.html', '.htm', '.js', '.ts', '.tsx', '.jsx', '.css', '.sql',
+]);
+
+const TEXT_EXTENSIONS = new Set([
+  '.txt', '.md', '.csv', '.json', '.xml', '.yaml', '.yml',
+  '.html', '.htm', '.js', '.ts', '.tsx', '.jsx', '.css', '.sql',
 ]);
 
 function safeFileName(input: string): string {
@@ -48,6 +53,44 @@ function assertPathInside(candidate: string, root: string): void {
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error('Attachment path escaped the configured storage root.');
   }
+}
+
+function hasPrefix(content: Buffer, prefix: readonly number[]): boolean {
+  return prefix.every((value, index) => content[index] === value);
+}
+
+function assertAttachmentSignature(extension: string, content: Buffer): void {
+  if (TEXT_EXTENSIONS.has(extension)) {
+    if (content.includes(0)) throw new Error('Tệp văn bản chứa byte nhị phân không hợp lệ.');
+    return;
+  }
+  if (extension === '.pdf' && !content.subarray(0, 5).equals(Buffer.from('%PDF-'))) {
+    throw new Error('Nội dung tệp không khớp định dạng PDF.');
+  }
+  if (extension === '.png' && !hasPrefix(content, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
+    throw new Error('Nội dung tệp không khớp định dạng PNG.');
+  }
+  if ((extension === '.jpg' || extension === '.jpeg') && !hasPrefix(content, [0xff, 0xd8, 0xff])) {
+    throw new Error('Nội dung tệp không khớp định dạng JPEG.');
+  }
+  if (extension === '.webp') {
+    const valid = content.subarray(0, 4).toString('ascii') === 'RIFF'
+      && content.subarray(8, 12).toString('ascii') === 'WEBP';
+    if (!valid) throw new Error('Nội dung tệp không khớp định dạng WebP.');
+  }
+  if (['.docx', '.xlsx', '.pptx'].includes(extension) && !hasPrefix(content, [0x50, 0x4b])) {
+    throw new Error('Nội dung tệp Office không phải gói Open XML hợp lệ.');
+  }
+}
+
+function decodeBase64(value: string): Buffer {
+  const normalized = value.replace(/\s+/g, '');
+  if (!normalized || normalized.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) {
+    throw new Error('Dữ liệu tệp không phải base64 hợp lệ.');
+  }
+  const content = Buffer.from(normalized, 'base64');
+  if (!content.length) throw new Error('Tệp đính kèm rỗng hoặc base64 không hợp lệ.');
+  return content;
 }
 
 @Injectable()
@@ -100,12 +143,12 @@ export class ChatService {
     if (!ALLOWED_EXTENSIONS.has(extension)) {
       throw new Error(`Loại tệp chưa được phép: ${extension || 'không có phần mở rộng'}`);
     }
-    const content = Buffer.from(input.contentBase64, 'base64');
-    if (!content.length) throw new Error('Tệp đính kèm rỗng hoặc base64 không hợp lệ.');
+    const content = decodeBase64(input.contentBase64);
     const env = getEnv();
     if (content.length > env.CHAT_MAX_ATTACHMENT_BYTES) {
       throw new Error(`Tệp vượt giới hạn ${env.CHAT_MAX_ATTACHMENT_BYTES} byte.`);
     }
+    assertAttachmentSignature(extension, content);
     const storageToken = `FILE-${randomUUID()}`;
     const ownerSegment = identity.ownerId.replace(/[^a-zA-Z0-9._-]/g, '_');
     const workspaceSegment = identity.workspaceId.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -139,7 +182,7 @@ export class ChatService {
       mediaType: input.mediaType,
       sizeBytes: content.length,
       sha256,
-      metadata: { extension, storage: 'WORKSPACE_BIND_MOUNT' },
+      metadata: { extension, storage: 'WORKSPACE_BIND_MOUNT', signatureChecked: true },
     });
     return { attachment };
   }
@@ -150,11 +193,7 @@ export class ChatService {
     rawInput: unknown,
   ): Promise<ConversationSnapshot> {
     const input = MessageInputSchema.parse(rawInput);
-    const attachments = await this.#store.getReadyAttachments(
-      identity,
-      conversationId,
-      input.attachmentIds,
-    );
+    const attachments = await this.#store.getReadyAttachments(identity, conversationId, input.attachmentIds);
     const clientMessageId = input.clientMessageId ?? `CLIENT-${randomUUID()}`;
     const userMessage = await this.#store.addUserMessage(
       identity,
