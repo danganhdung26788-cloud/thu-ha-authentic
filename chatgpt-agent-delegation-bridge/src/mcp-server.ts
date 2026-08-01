@@ -33,10 +33,11 @@ function resultForModel(result: DelegationResult) {
 }
 
 const codexInputShape = {
-  objective: z.string().trim().min(1).max(50_000).describe('The exact bounded coding task ChatGPT wants Codex to perform.'),
-  context: z.string().trim().max(50_000).optional().describe('Only the relevant context already known by ChatGPT. Never include secrets.'),
+  objective: z.string().trim().min(1).max(50_000).describe('The exact bounded coding question ChatGPT wants Codex to analyze.'),
+  context: z.string().trim().max(50_000).optional().describe('Only relevant context already known by ChatGPT. Never include secrets.'),
   workspaceId: z.string().trim().min(1).max(120).optional().describe('An allowlisted workspace ID. Omit to use the server default.'),
-  paths: z.array(z.string().trim().min(1).max(1_000)).max(50).default([]).describe('Optional repository paths Codex should focus on.'),
+  paths: z.array(z.string().trim().min(1).max(1_000)).max(50).default([]).describe('Optional allowlisted repository paths Codex should inspect.'),
+  responseFormat: z.enum(['analysis', 'implementation-plan', 'unified-diff-proposal']).default('analysis').describe('The requested read-only response format. A diff is a proposal only and is never applied by Codex.'),
   outputLanguage: z.enum(['vi', 'en']).optional().describe('Language for the specialist result. Vietnamese is the default.'),
   timeoutSeconds: z.number().int().min(10).max(1_800).optional(),
   idempotencyKey: z.string().trim().min(8).max(200).optional().describe('Stable key to prevent duplicate specialist execution.'),
@@ -49,11 +50,12 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
   }, {
     instructions: [
       'ChatGPT is the primary brain and owns the conversation, context, follow-ups, approvals, and final answer.',
-      'Use this server only for explicit specialist delegation or bounded local execution when native ChatGPT reasoning or connected tools are insufficient.',
+      'Use this server only for explicit specialist advice or bounded local execution when native ChatGPT reasoning or connected tools are insufficient.',
       'Do not use this server for current weather, web search, email, calendar, Drive search, ordinary writing, or status questions about the conversation.',
       'Select the target by choosing the explicit MCP tool. There is no backend router or Manager Agent.',
+      'AI specialist tools are read-only and return analysis, plans, or proposals to ChatGPT. They never mutate the user workspace.',
       'Treat delegated output as evidence or advice to evaluate, not as an automatic final answer.',
-      'Read-only tools must not mutate state. Mutating tools require user-facing confirmation and must stay within the supplied scope.',
+      'Only the explicitly named local executor can mutate allowlisted resources, and mutating calls require user-facing confirmation.',
       'The local runtime executor is not an AI specialist and must never be described as Hermes or another model.',
     ].join(' '),
   });
@@ -62,7 +64,7 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
     'delegation_health',
     {
       title: 'Check delegation availability',
-      description: 'Use only to verify which delegation targets and local capabilities are available. This does not answer user questions and does not create a task.',
+      description: 'Use only to verify which specialist and local capabilities are available. This does not answer user questions and does not create a task.',
       inputSchema: {},
       annotations: {
         readOnlyHint: true,
@@ -83,11 +85,12 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
     server.registerTool(
       'ask_codex',
       {
-        title: 'Ask Codex to inspect or advise on code',
+        title: 'Ask Codex for read-only code analysis or a change proposal',
         description: [
           'Call only when ChatGPT intentionally needs Codex-specific repository expertise.',
-          'This tool is read-only and must not be used for weather, web research, email, calendar, general writing, or questions ChatGPT can answer directly.',
-          'ChatGPT remains the primary brain and must evaluate the returned specialist result.',
+          'Codex is strictly read-only and returns analysis, an implementation plan, or a proposed unified diff to ChatGPT.',
+          'Codex never applies changes. Any later mutation must use a separate approved local execution tool.',
+          'Do not use this tool for weather, web research, email, calendar, general writing, or questions ChatGPT can answer directly.',
         ].join(' '),
         inputSchema: codexInputShape,
         annotations: {
@@ -97,26 +100,6 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
         },
       },
       async (input) => resultForModel(await service.askCodex(input)),
-    );
-
-    server.registerTool(
-      'execute_codex',
-      {
-        title: 'Ask Codex to modify an allowlisted repository',
-        description: [
-          'Call only after the user has approved a bounded code change and ChatGPT has selected Codex.',
-          'This tool may modify files inside an allowlisted repository and run tests.',
-          'It never grants itself broader permissions and never replaces ChatGPT conversation control.',
-        ].join(' '),
-        inputSchema: codexInputShape,
-        annotations: {
-          readOnlyHint: false,
-          destructiveHint: false,
-          idempotentHint: false,
-          openWorldHint: false,
-        },
-      },
-      async (input) => resultForModel(await service.executeCodex(input)),
     );
   }
 
@@ -188,6 +171,7 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
         description: [
           'Use only when ChatGPT determines that the configured specialist AI adds material value beyond ChatGPT and native tools.',
           'The target model is fixed by server configuration; this tool cannot select or silently switch providers.',
+          'This specialist returns an answer only and cannot mutate local or external systems.',
           'ChatGPT must evaluate the result and remains responsible for the final response.',
         ].join(' '),
         inputSchema: {
