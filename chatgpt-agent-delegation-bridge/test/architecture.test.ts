@@ -42,7 +42,6 @@ test('workspace registry rejects unregistered workspaces and path escape', () =>
       allowedScripts: [],
       scheduledTaskPrefix: 'TEST-',
       allowCodexRead: true,
-      allowCodexWrite: false,
       allowLocalRead: true,
       allowLocalWrite: false,
     }],
@@ -62,16 +61,17 @@ test('new bridge contains no replacement UI, business database, queue, or backen
   assert.doesNotMatch(combined, /bullmq|ioredis|postgres|conversation_id|chat_messages|manager-agent|runManagerDecision/iu);
   assert.doesNotMatch(combined, /<html|textarea|chat-page|admin-page/iu);
   assert.match(combined, /ask_codex/);
-  assert.match(combined, /execute_codex/);
+  assert.doesNotMatch(combined, /execute_codex/);
   assert.match(combined, /ChatGPT remains responsible|ChatGPT primary brain/iu);
 });
 
-test('mutating MCP tools are distinct from read-only tools and carry approval annotations', async () => {
+test('specialist AI tools are read-only while local mutation is separate and approval annotated', async () => {
   const mcp = await source('src/mcp-server.ts');
   assert.match(mcp, /'ask_codex'[\s\S]*?readOnlyHint:\s*true/);
-  assert.match(mcp, /'execute_codex'[\s\S]*?readOnlyHint:\s*false/);
+  assert.doesNotMatch(mcp, /'execute_codex'/);
   assert.match(mcp, /'inspect_local_runtime'[\s\S]*?readOnlyHint:\s*true/);
   assert.match(mcp, /'execute_local_operations'[\s\S]*?destructiveHint:\s*true/);
+  assert.match(mcp, /AI specialist tools are read-only/);
 });
 
 test('local executor is never presented as Hermes AI', async () => {
@@ -86,4 +86,12 @@ test('local executor is never presented as Hermes AI', async () => {
   assert.doesNotMatch(combined, /HermesSpecialist|inspectWithHermes|executeWithHermes|HERMES_ENABLED/);
   assert.match(combined, /LOCAL_EXECUTOR/);
   assert.match(combined, /not an AI/iu);
+});
+
+test('Codex specialist is strictly read-only and proposal-oriented', async () => {
+  const codex = await source('src/specialists/codex.ts');
+  assert.match(codex, /sandboxMode:\s*'read-only'/);
+  assert.match(codex, /READ_ONLY_PROPOSAL/);
+  assert.match(codex, /unified diff as text/iu);
+  assert.doesNotMatch(codex, /workspace-write/);
 });
