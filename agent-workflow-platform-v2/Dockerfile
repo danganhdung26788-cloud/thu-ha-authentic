@@ -9,6 +9,7 @@ COPY tsconfig.json ./
 COPY src ./src
 COPY test ./test
 COPY migrations ./migrations
+COPY scripts ./scripts
 RUN npm run check && npm run test && npm run build
 RUN npm prune --omit=dev
 
