@@ -3,10 +3,15 @@ import { ChatStore } from '../../chat/chat-store.js';
 import type { ManagerDecision } from '../../contracts/execution-context.js';
 import type { PostgresControlPlaneStore } from '../../control-plane/postgres-store.js';
 import type { TaskRecord } from '../../domain/task.js';
+import { redactSecrets } from '../../diagnostics/redaction.js';
 import { createTaskDiagnostic, type DiagnosticStage } from '../../diagnostics/task-diagnostic.js';
 import type { ExecutorResult } from '../../executors/contracts.js';
 
 const chat = new ChatStore();
+
+function safeText(value: string, maxBytes = 4_096): string {
+  return redactSecrets(value, maxBytes).text;
+}
 
 export async function chatTaskClaimed(task: TaskRecord): Promise<void> {
   if (!task.conversationId) return;
@@ -35,7 +40,7 @@ export async function chatRouteAuthorized(
     percent: 30,
     metadata: {
       executor: manager.executor,
-      rationale: manager.rationale,
+      rationale: safeText(manager.rationale),
       requestedTools: manager.requestedTools,
     },
   });
@@ -52,15 +57,22 @@ export async function interruptForClarification(
   if (!task.conversationId) {
     throw new Error('Manager requested clarification for a task without a conversation.');
   }
+  const question = safeText(clarification.question);
+  const options = clarification.options.map((option) => safeText(option, 1_024));
+  const reason = safeText(clarification.reason);
   const record = await chat.createClarification({
     conversationId: task.conversationId,
     taskId: task.taskId,
-    question: clarification.question,
-    options: clarification.options,
-    reason: clarification.reason,
+    question,
+    options,
+    reason,
   });
   await store.finishExecution(executionId, 'INTERRUPTED', {
-    manager,
+    manager: {
+      executor: manager.executor,
+      nextAction: safeText(manager.nextAction),
+      clarification: { question, options, reason },
+    },
     clarificationId: record.clarificationId,
   });
   await store.updateTaskStatus(task.taskId, 'WAITING_INPUT', {
@@ -78,20 +90,20 @@ export async function interruptForClarification(
     actor: 'MANAGER_AGENT',
     details: {
       clarificationId: record.clarificationId,
-      question: clarification.question,
-      options: clarification.options,
-      reason: clarification.reason,
+      question,
+      options,
+      reason,
     },
   });
   await chat.addAssistantMessage(
     task.conversationId,
     task.taskId,
-    clarification.question,
+    question,
     {
       type: 'CLARIFICATION',
       clarificationId: record.clarificationId,
-      options: clarification.options,
-      reason: clarification.reason,
+      options,
+      reason,
     },
   );
   await chat.appendProgress({
@@ -106,10 +118,10 @@ export async function interruptForClarification(
   await createTaskDiagnostic({
     task: { ...task, status: 'WAITING_INPUT', attempt: Math.max(1, task.attempt + 1) },
     stage: 'CLARIFICATION',
-    error: clarification.reason,
+    error: reason,
     executor: manager.executor,
-    routeSummary: manager.nextAction,
-    context: { clarificationId: record.clarificationId, question: clarification.question },
+    routeSummary: safeText(manager.nextAction),
+    context: { clarificationId: record.clarificationId, question },
   });
   return true;
 }
@@ -121,10 +133,12 @@ export async function chatApprovalRequested(
   reason: string,
 ): Promise<void> {
   if (!task.conversationId) return;
+  const safeAction = safeText(manager.nextAction);
+  const safeReason = safeText(reason);
   await chat.addAssistantMessage(
     task.conversationId,
     task.taskId,
-    `Tác vụ cần phê duyệt trước khi tiếp tục.\n\n${manager.nextAction}\n\nLý do: ${reason}`,
+    `Tác vụ cần phê duyệt trước khi tiếp tục.\n\n${safeAction}\n\nLý do: ${safeReason}`,
     { type: 'APPROVAL', approvalId, executor: manager.executor },
   );
   await chat.appendProgress({
@@ -134,14 +148,14 @@ export async function chatApprovalRequested(
     stage: 'WAITING_APPROVAL',
     message: 'Đang chờ phê duyệt cho thao tác được bảo vệ.',
     percent: 40,
-    metadata: { approvalId, executor: manager.executor, reason },
+    metadata: { approvalId, executor: manager.executor, reason: safeReason },
   });
   await createTaskDiagnostic({
     task: { ...task, status: 'WAITING_APPROVAL', attempt: Math.max(1, task.attempt + 1) },
     stage: 'APPROVAL',
-    error: reason,
+    error: safeReason,
     executor: manager.executor,
-    routeSummary: manager.nextAction,
+    routeSummary: safeAction,
     context: { approvalId },
   });
 }
@@ -158,7 +172,7 @@ export async function chatExecutionStarted(
     stage: manager.executor,
     message: `${manager.executor} đang thực hiện nhiệm vụ.`,
     percent: 55,
-    metadata: { executor: manager.executor, nextAction: manager.nextAction },
+    metadata: { executor: manager.executor, nextAction: safeText(manager.nextAction) },
   });
 }
 
@@ -203,7 +217,7 @@ export async function chatTaskRetryScheduled(
     stage: 'RETRY_WAIT',
     message: 'Hệ thống gặp lỗi tạm thời và đang tự lên lịch thử lại.',
     percent: 60,
-    metadata: { error: message, nextRunAt: nextRunAt.toISOString() },
+    metadata: { error: safeText(message), nextRunAt: nextRunAt.toISOString() },
   });
 }
 
@@ -214,7 +228,8 @@ export async function chatTaskFailed(
   stage: DiagnosticStage = 'EXECUTION',
 ): Promise<void> {
   if (!task.conversationId) return;
-  const message = error instanceof Error ? error.message : String(error);
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const message = safeText(rawMessage);
   await chat.addAssistantMessage(
     task.conversationId,
     task.taskId,
