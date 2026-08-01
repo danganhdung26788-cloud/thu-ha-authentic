@@ -19,6 +19,7 @@ const dummyDecision = {
 } as const;
 
 test('deterministic routing authority covers all 100 acceptance scenarios', () => {
+  const mismatches: string[] = [];
   for (const scenario of ROUTING_SCENARIOS) {
     const compiled = compileChatTask(scenario.prompt, []);
     const context: ExecutionContext = {
@@ -33,11 +34,20 @@ test('deterministic routing authority covers all 100 acceptance scenarios', () =
     };
     const hint = deterministicRoutingHint(scenario.prompt, context);
     const normalized = normalizeManagerDecision(dummyDecision, scenario.prompt, context);
-    assert.equal(hint.executor, scenario.expectedExecutor, `${scenario.id} deterministic hint executor`);
-    assert.equal(normalized.executor, scenario.expectedExecutor, `${scenario.id} normalized executor`);
-    assert.equal(normalized.requiresApproval, scenario.expectApproval, `${scenario.id} approval`);
-    assert.equal(Boolean(normalized.clarification), scenario.expectClarification, `${scenario.id} clarification`);
+    if (hint.executor !== scenario.expectedExecutor) {
+      mismatches.push(`${scenario.id}: hint executor ${hint.executor} != ${scenario.expectedExecutor}`);
+    }
+    if (normalized.executor !== scenario.expectedExecutor) {
+      mismatches.push(`${scenario.id}: normalized executor ${normalized.executor} != ${scenario.expectedExecutor}`);
+    }
+    if (normalized.requiresApproval !== scenario.expectApproval) {
+      mismatches.push(`${scenario.id}: approval ${normalized.requiresApproval} != ${scenario.expectApproval}`);
+    }
+    if (Boolean(normalized.clarification) !== scenario.expectClarification) {
+      mismatches.push(`${scenario.id}: clarification ${Boolean(normalized.clarification)} != ${scenario.expectClarification}`);
+    }
   }
+  assert.deepEqual(mismatches, []);
 });
 
 test('local JSON extraction removes thinking and Markdown wrappers', () => {
