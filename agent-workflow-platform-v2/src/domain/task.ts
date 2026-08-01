@@ -7,6 +7,7 @@ import {
 export const TaskStatusSchema = z.enum([
   'QUEUED',
   'RUNNING',
+  'WAITING_INPUT',
   'WAITING_APPROVAL',
   'RETRY_WAIT',
   'COMPLETED',
@@ -20,6 +21,8 @@ export const CreateTaskSchema = z.object({
   idempotencyKey: z.string().min(1),
   ownerId: z.string().min(1),
   workspaceId: z.string().min(1),
+  conversationId: z.string().min(1).nullable().default(null),
+  sourceMessageId: z.string().min(1).nullable().default(null),
   objective: z.string().min(1),
   readScope: z.array(z.string().min(1)).min(1),
   writeScope: z.array(z.string().min(1)),

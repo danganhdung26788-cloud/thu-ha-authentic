@@ -46,6 +46,45 @@ services:
       retries: 10
     networks: [control]
 
+  clamav:
+    image: clamav/clamav:1.5
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --ping 1 >/dev/null 2>&1"]
+      interval: 20s
+      timeout: 10s
+      retries: 30
+      start_period: 90s
+    networks: [control]
+
+  ollama:
+    image: ollama/ollama:0.32.3
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-24h}
+      OLLAMA_NOHISTORY: "1"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+    networks: [control]
+
+  ollama-pull:
+    image: ollama/ollama:0.32.3
+    restart: "no"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    command: ["pull", "${OLLAMA_MODEL:-qwen3:4b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks: [control]
+
   migrate:
     build: .
     command: ["node", "dist/src/db/migrate.js"]
@@ -60,10 +99,30 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_BUCKET: ${MINIO_BUCKET:-agent-v2-evidence}
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-ollama}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-http://ollama:11434/v1}
+      MODEL_API_KEY: ${MODEL_API_KEY:-ollama-local}
+      MANAGER_MODEL: ${MANAGER_MODEL:-qwen3:4b}
+      SPECIALIST_MODEL: ${SPECIALIST_MODEL:-qwen3:4b}
+      MODEL_USE_RESPONSES: ${MODEL_USE_RESPONSES:-false}
+      MODEL_REQUEST_TIMEOUT_MS: ${MODEL_REQUEST_TIMEOUT_MS:-90000}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MANAGER_MODEL: ${OPENAI_MANAGER_MODEL:-}
       OPENAI_SPECIALIST_MODEL: ${OPENAI_SPECIALIST_MODEL:-}
       OPENAI_AGENTS_DISABLE_TRACING: ${OPENAI_AGENTS_DISABLE_TRACING:-1}
+      AGENT_MAX_TURNS: ${AGENT_MAX_TURNS:-12}
+      DEFAULT_OWNER_ID: ${DEFAULT_OWNER_ID:-danganhdung}
+      DEFAULT_WORKSPACE_ID: ${DEFAULT_WORKSPACE_ID:-workflow-v2-sandbox}
+      CHAT_SESSION_TTL_SECONDS: ${CHAT_SESSION_TTL_SECONDS:-86400}
+      CHAT_ATTACHMENT_ROOT: /workspace/chat-attachments
+      CHAT_ATTACHMENT_SCOPE_ROOT: runtime/chat-attachments
+      CHAT_MAX_ATTACHMENT_BYTES: ${CHAT_MAX_ATTACHMENT_BYTES:-26214400}
+      CHAT_MAX_DIAGNOSTIC_BYTES: ${CHAT_MAX_DIAGNOSTIC_BYTES:-20480}
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
+      CLAMAV_TIMEOUT_MS: ${CLAMAV_TIMEOUT_MS:-120000}
+      CLAMAV_REQUIRED: ${CLAMAV_REQUIRED:-true}
+      RUNTIME_GIT_COMMIT: ${RUNTIME_GIT_COMMIT:-unknown}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-}
       GEMINI_API_VERSION: ${GEMINI_API_VERSION:-v1}
@@ -86,6 +145,8 @@ services:
     environment:
       <<: *platform-env
       PORT: 3100
+    volumes:
+      - ./runtime/chat-attachments:/workspace/chat-attachments
     ports:
       - "127.0.0.1:${AGENT_V2_API_PORT:-3100}:3100"
     depends_on:
@@ -95,11 +156,16 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      clamav:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3100/ready').then(r=>{if(!r.ok)process.exit(1)})"]
       interval: 15s
-      timeout: 5s
-      retries: 10
+      timeout: 10s
+      retries: 20
+      start_period: 30s
     networks: [control]
 
   worker:
@@ -107,6 +173,8 @@ services:
     command: ["node", "dist/src/apps/worker/main.js"]
     restart: unless-stopped
     environment: *platform-env
+    volumes:
+      - ./runtime/chat-attachments:/workspace/chat-attachments
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -114,6 +182,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
     networks: [control]
 
 networks:
@@ -124,3 +194,4 @@ volumes:
   postgres-data:
   redis-data:
   minio-data:
+  ollama-data:

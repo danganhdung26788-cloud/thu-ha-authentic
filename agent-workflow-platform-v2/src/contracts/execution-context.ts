@@ -44,12 +44,21 @@ export const PlannedToolCallSchema = z.object({
 
 export type PlannedToolCall = z.infer<typeof PlannedToolCallSchema>;
 
+export const ClarificationRequestSchema = z.object({
+  question: z.string().min(1),
+  options: z.array(z.string().min(1)).max(8).default([]),
+  reason: z.string().min(1),
+});
+
+export type ClarificationRequest = z.infer<typeof ClarificationRequestSchema>;
+
 export const ManagerDecisionSchema = z.object({
   executor: ExecutorSchema,
   rationale: z.string().min(1),
   nextAction: z.string().min(1),
   requestedTools: z.array(z.string().min(1)),
   toolCalls: z.array(PlannedToolCallSchema).optional(),
+  clarification: ClarificationRequestSchema.optional(),
   requiresApproval: z.boolean(),
 });
 
