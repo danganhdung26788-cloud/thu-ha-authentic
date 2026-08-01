@@ -1,6 +1,8 @@
 import { Agent, Runner } from '@openai/agents';
 import { z } from 'zod';
+import { getEnv } from '../config/env.js';
 import type { ExecutionContext } from '../contracts/execution-context.js';
+import { getConfiguredModelProvider } from '../models/model-provider.js';
 import { AgentRegistryStore } from '../registry/agent-registry.js';
 
 const SpecialistOutputSchema = z.object({
@@ -19,8 +21,11 @@ export async function runSpecialistAgent(
 ): Promise<SpecialistOutput> {
   const registered = await new AgentRegistryStore().get('specialist');
   if (registered?.status !== 'ACTIVE') throw new Error('Specialist Agent is not ACTIVE.');
-  const model = registered.model?.trim() || process.env.OPENAI_SPECIALIST_MODEL?.trim();
-  if (!model) throw new Error('Specialist model is not configured in Agent Registry or OPENAI_SPECIALIST_MODEL.');
+  const env = getEnv();
+  const model = registered.model?.trim()
+    || env.SPECIALIST_MODEL.trim()
+    || env.OPENAI_SPECIALIST_MODEL?.trim();
+  if (!model) throw new Error('Specialist model is not configured.');
   const agent = new Agent({
     name: registered.displayName,
     model,
@@ -33,7 +38,8 @@ export async function runSpecialistAgent(
     ].join('\n'),
   });
   const runner = new Runner({
-    tracingDisabled: process.env.OPENAI_AGENTS_DISABLE_TRACING?.trim() === '1',
+    modelProvider: getConfiguredModelProvider(),
+    tracingDisabled: env.OPENAI_AGENTS_DISABLE_TRACING === '1',
     workflowName: 'workflow-v2-specialist',
     traceIncludeSensitiveData: false,
   });
@@ -43,7 +49,7 @@ export async function runSpecialistAgent(
     `WORKSPACE_ID=${context.workspaceId}`,
     `OBJECTIVE=${objective}`,
     `INSTRUCTIONS=${instructions}`,
-  ].join('\n'), { context, maxTurns: 12 });
+  ].join('\n'), { context, maxTurns: env.AGENT_MAX_TURNS });
   if (!response.finalOutput) throw new Error('Specialist Agent returned no structured output.');
   return response.finalOutput;
 }
