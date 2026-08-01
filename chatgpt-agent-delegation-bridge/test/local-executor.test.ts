@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -78,6 +78,33 @@ test('local executor rejects path escape and does not write outside workspace', 
     assert.match(result.summary, /outside|allowlisted|scope/iu);
   } finally {
     await rm(root, { recursive: true, force: true });
+    resetConfigForTests();
+  }
+});
+
+test('local executor rejects an existing symlink path that escapes the workspace', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const { root, service } = await fixture();
+  const outside = await mkdtemp(join(tmpdir(), 'delegation-local-executor-outside-'));
+  try {
+    await symlink(outside, join(root, 'out', 'linked-outside'), 'dir');
+    const result = await service.executeLocalOperations({
+      objective: 'Attempt a write through a linked directory.',
+      workspaceId: 'test',
+      operations: [{
+        toolId: 'filesystem.write',
+        input: { path: 'out/linked-outside/escape.txt', content: 'blocked' },
+      }],
+      readPaths: ['.'],
+      writePaths: ['out'],
+      idempotencyKey: 'local-write-symlink-001',
+    });
+    assert.equal(result.status, 'FAILED');
+    assert.match(result.summary, /symbolic|junction|escape/iu);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
     resetConfigForTests();
   }
 });
