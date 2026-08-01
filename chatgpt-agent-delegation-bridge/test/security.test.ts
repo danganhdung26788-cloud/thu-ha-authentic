@@ -38,7 +38,7 @@ test('disabled Agents SDK specialist returns BLOCKED and never falls back', asyn
     NODE_ENV: 'test',
     SPECIALIST_AGENT_ENABLED: 'false',
     CODEX_ENABLED: 'false',
-    HERMES_ENABLED: 'false',
+    LOCAL_EXECUTOR_ENABLED: 'false',
   });
   const result = await new AgentsSdkSpecialist(bridgeConfig).run({
     objective: 'Ask another model.',
