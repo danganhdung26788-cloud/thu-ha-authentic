@@ -18,7 +18,6 @@
       "allowedScripts": [],
       "scheduledTaskPrefix": "SYSTEM-AI-",
       "allowCodexRead": true,
-      "allowCodexWrite": false,
       "allowLocalRead": true,
       "allowLocalWrite": false
     }
