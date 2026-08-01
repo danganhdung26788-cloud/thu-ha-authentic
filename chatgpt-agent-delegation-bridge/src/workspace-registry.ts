@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, delimiter, isAbsolute, relative, resolve } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, relative, resolve } from 'node:path';
 import {
   WorkspaceRegistrySchema,
   type WorkspaceRegistration,
@@ -29,6 +29,42 @@ function systemPathEntries(): string[] {
     .map((entry) => resolve(entry));
 }
 
+function nearestExistingAncestor(candidate: string): string {
+  let current = candidate;
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) throw new Error(`No existing ancestor was found for path: ${candidate}`);
+    current = parent;
+  }
+  return current;
+}
+
+function assertNoLinkedSegments(root: string, candidate: string): void {
+  const relation = relative(root, candidate);
+  if (relation.startsWith('..') || isAbsolute(relation)) {
+    throw new Error(`Path is outside the allowlisted workspace: ${candidate}`);
+  }
+  let current = root;
+  for (const segment of relation.split(/[\\/]/u).filter(Boolean)) {
+    current = resolve(current, segment);
+    if (!existsSync(current)) break;
+    if (lstatSync(current).isSymbolicLink()) {
+      throw new Error(`Symbolic links and junctions are not allowed in delegated paths: ${candidate}`);
+    }
+  }
+}
+
+function canonicalizeWithinRoot(root: string, candidate: string): string {
+  assertNoLinkedSegments(root, candidate);
+  const existing = nearestExistingAncestor(candidate);
+  const canonicalExisting = realpathSync.native(existing);
+  const canonical = resolve(canonicalExisting, relative(existing, candidate));
+  if (!pathInside(canonical, root)) {
+    throw new Error(`Resolved path escapes the allowlisted workspace: ${candidate}`);
+  }
+  return canonical;
+}
+
 export class WorkspaceRegistry {
   readonly #document: WorkspaceRegistryDocument;
   readonly #byId: ReadonlyMap<string, WorkspaceRegistration>;
@@ -41,8 +77,12 @@ export class WorkspaceRegistry {
         throw new Error(`Duplicate workspaceId: ${workspace.workspaceId}`);
       }
       seen.add(workspace.workspaceId);
-      const root = resolve(workspace.root);
-      if (!isAbsolute(root)) throw new Error(`Workspace root must be absolute: ${workspace.workspaceId}`);
+      const configuredRoot = resolve(workspace.root);
+      if (!isAbsolute(configuredRoot)) throw new Error(`Workspace root must be absolute: ${workspace.workspaceId}`);
+      if (!existsSync(configuredRoot) || !lstatSync(configuredRoot).isDirectory()) {
+        throw new Error(`Workspace root must be an existing directory: ${workspace.workspaceId}`);
+      }
+      const root = realpathSync.native(configuredRoot);
       const readRoots = workspace.readRoots.map((entry) => this.normalizeChild(root, entry, 'read root'));
       const writeRoots = workspace.writeRoots.map((entry) => this.normalizeChild(root, entry, 'write root'));
       const allowedScripts = workspace.allowedScripts.map((entry) => this.normalizeChild(root, entry, 'script'));
@@ -83,7 +123,7 @@ export class WorkspaceRegistry {
     if (!pathInside(absolute, workspace.root)) {
       throw new Error(`Path is outside the allowlisted workspace: ${candidate}`);
     }
-    return absolute;
+    return canonicalizeWithinRoot(workspace.root, absolute);
   }
 
   resolveReadPath(workspace: WorkspaceRegistration, candidate: string): string {
@@ -122,12 +162,13 @@ export class WorkspaceRegistry {
 
     for (const directory of systemPathEntries()) {
       const candidate = resolve(directory, name);
-      if (existsSync(candidate)) {
-        this.#executableCache.set(cacheKey, candidate);
-        return candidate;
-      }
+      if (!existsSync(candidate)) continue;
+      const canonical = realpathSync.native(candidate);
+      if (pathInside(canonical, workspace.root)) continue;
+      this.#executableCache.set(cacheKey, canonical);
+      return canonical;
     }
-    throw new Error(`Allowlisted executable was not found on the system PATH: ${name}`);
+    throw new Error(`Allowlisted executable was not found outside the workspace on the system PATH: ${name}`);
   }
 
   assertScript(workspace: WorkspaceRegistration, candidate: string): string {
@@ -163,7 +204,7 @@ export class WorkspaceRegistry {
     if (!pathInside(absolute, root)) {
       throw new Error(`Registered ${kind} is outside workspace root: ${candidate}`);
     }
-    return absolute;
+    return canonicalizeWithinRoot(root, absolute);
   }
 }
 
