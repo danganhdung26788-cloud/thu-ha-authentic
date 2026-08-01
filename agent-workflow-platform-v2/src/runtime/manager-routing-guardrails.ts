@@ -46,8 +46,9 @@ const CANVA_TERMS = [
   'slide trực quan', 'hình ảnh truyền thông', 'xuất file thiết kế', 'xuất bản tài liệu',
 ];
 const NOTEBOOK_TERMS = [
-  'notebooklm', 'notebook', 'gói nguồn', 'manifest nguồn', 'bộ nguồn',
-  'workspace notebook', 'nguồn đóng', 'nguồn khép kín', 'gói tài liệu nghiên cứu',
+  'notebooklm', 'notebook', 'gói nguồn', 'gói nghiên cứu', 'manifest nguồn',
+  'bộ nguồn', 'workspace notebook', 'nguồn đóng', 'nguồn khép kín',
+  'gói tài liệu nghiên cứu', 'chỉ dựa trên các tài liệu đã tải lên',
 ];
 const HERMES_PRIORITY_TERMS = [
   'git working tree trên máy', 'trạng thái git working tree', 'cổng adapter',
