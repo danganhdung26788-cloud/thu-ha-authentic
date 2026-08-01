@@ -47,8 +47,11 @@ if ($registration -notmatch 'Get-Command\s+node\.exe' -or $registration -notmatc
 if ($registration -notmatch 'Stop-StaleAdapterListener' -or $registration -notmatch 'Get-NetTCPConnection' -or $registration -notmatch 'ExpectedEntrypoint') {
   $violations += "${registrationPath}: stale adapter process cleanup contract is missing"
 }
-if ($registration -notmatch 'Wait-AdapterHealth' -or $registration -notmatch 'Invoke-RestMethod' -or $registration -notmatch 'health-verified') {
+if ($registration -notmatch 'Wait-AdapterHealth' -or $registration -notmatch 'Invoke-RestMethod' -or $registration -notmatch 'authenticated-health-verified') {
   $violations += "${registrationPath}: post-start adapter health verification contract is missing"
+}
+if ($registration -notmatch 'HOST_ADAPTER_TOKEN' -or $registration -notmatch 'Authorization\s*=\s*"Bearer\s+\$Token"' -or $registration -notmatch '-Headers\s+\$headers') {
+  $violations += "${registrationPath}: authenticated adapter health contract is missing"
 }
 
 if ($violations.Count -gt 0) {
@@ -57,4 +60,4 @@ if ($violations.Count -gt 0) {
 
 Write-Host 'Windows PowerShell 5.1 compatibility scan PASS.'
 Write-Host 'Direct node.exe host adapter lifecycle contract PASS.'
-Write-Host 'Stale adapter cleanup and post-start health verification contract PASS.'
+Write-Host 'Stale adapter cleanup and authenticated post-start health verification contract PASS.'
