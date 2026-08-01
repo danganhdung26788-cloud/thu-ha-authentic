@@ -57,7 +57,7 @@ $stderrPath = Join-Path $runtime 'bridge.stderr.log'
 function Test-Health {
   try {
     $response = Invoke-RestMethod -Uri $healthUri -Headers $headers -TimeoutSec 3
-    return $response.ok -eq $true
+    return $response.ok -eq $true -and $response.bridge -eq 'chatgpt-primary-delegation'
   } catch {
     return $false
   }
@@ -72,9 +72,11 @@ if (Test-Path $pidPath) {
   $priorPid = 0
   [void][int]::TryParse((Get-Content -Raw -LiteralPath $pidPath).Trim(), [ref]$priorPid)
   if ($priorPid -gt 0) {
-    $prior = Get-Process -Id $priorPid -ErrorAction SilentlyContinue
-    if ($null -ne $prior) {
-      Stop-Process -Id $priorPid -Force -ErrorAction SilentlyContinue
+    $prior = Get-CimInstance Win32_Process -Filter "ProcessId=$priorPid" -ErrorAction SilentlyContinue
+    if ($null -ne $prior -and
+        $prior.Name -eq 'node.exe' -and
+        $prior.CommandLine -match 'dist[\\/]src[\\/]index\.js') {
+      Stop-Process -Id $priorPid -Force -ErrorAction Stop
       Start-Sleep -Seconds 1
     }
   }
