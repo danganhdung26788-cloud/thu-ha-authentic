@@ -11,8 +11,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
-    "dev": "tsx src/index.ts",
-    "start": "node dist/src/index.js",
+    "dev": "node --env-file=.env --import tsx src/index.ts",
+    "start": "node --env-file=.env dist/src/index.js",
     "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
