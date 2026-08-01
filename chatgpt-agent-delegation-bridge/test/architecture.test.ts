@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   CodexDelegationInputSchema,
-  HermesExecuteInputSchema,
+  LocalExecuteInputSchema,
 } from '../src/contracts.js';
 import { WorkspaceRegistry } from '../src/workspace-registry.js';
 
@@ -16,18 +16,18 @@ async function source(path: string): Promise<string> {
 test('delegation inputs cannot select or override specialist target', () => {
   const codex = CodexDelegationInputSchema.parse({
     objective: 'Inspect the repository.',
-    target: 'HERMES',
+    target: 'LOCAL_EXECUTOR',
   });
   assert.equal('target' in codex, false);
 
-  const hermes = HermesExecuteInputSchema.parse({
+  const local = LocalExecuteInputSchema.parse({
     objective: 'Write an approved file.',
     operations: [{ toolId: 'filesystem.write', input: { path: 'a.txt', content: 'a' } }],
     readPaths: ['.'],
     writePaths: ['a.txt'],
     target: 'CODEX',
   });
-  assert.equal('target' in hermes, false);
+  assert.equal('target' in local, false);
 });
 
 test('workspace registry rejects unregistered workspaces and path escape', () => {
@@ -36,10 +36,15 @@ test('workspace registry rejects unregistered workspaces and path escape', () =>
     workspaces: [{
       workspaceId: 'main',
       root: process.cwd(),
+      readRoots: ['.'],
+      writeRoots: [],
+      allowedExecutables: [],
+      allowedScripts: [],
+      scheduledTaskPrefix: 'TEST-',
       allowCodexRead: true,
       allowCodexWrite: false,
-      allowHermesRead: true,
-      allowHermesWrite: false,
+      allowLocalRead: true,
+      allowLocalWrite: false,
     }],
   });
   assert.equal(registry.get().workspaceId, 'main');
@@ -65,6 +70,20 @@ test('mutating MCP tools are distinct from read-only tools and carry approval an
   const mcp = await source('src/mcp-server.ts');
   assert.match(mcp, /'ask_codex'[\s\S]*?readOnlyHint:\s*true/);
   assert.match(mcp, /'execute_codex'[\s\S]*?readOnlyHint:\s*false/);
-  assert.match(mcp, /'inspect_with_hermes'[\s\S]*?readOnlyHint:\s*true/);
-  assert.match(mcp, /'execute_with_hermes'[\s\S]*?destructiveHint:\s*true/);
+  assert.match(mcp, /'inspect_local_runtime'[\s\S]*?readOnlyHint:\s*true/);
+  assert.match(mcp, /'execute_local_operations'[\s\S]*?destructiveHint:\s*true/);
+});
+
+test('local executor is never presented as Hermes AI', async () => {
+  const files = await Promise.all([
+    source('src/contracts.ts'),
+    source('src/config.ts'),
+    source('src/delegation-service.ts'),
+    source('src/mcp-server.ts'),
+    source('src/specialists/local-executor.ts'),
+  ]);
+  const combined = files.join('\n');
+  assert.doesNotMatch(combined, /HermesSpecialist|inspectWithHermes|executeWithHermes|HERMES_ENABLED/);
+  assert.match(combined, /LOCAL_EXECUTOR/);
+  assert.match(combined, /not an AI/iu);
 });
