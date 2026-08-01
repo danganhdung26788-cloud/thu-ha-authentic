@@ -1,0 +1,80 @@
+import assert from 'node:assert/strict';
+import type { AddressInfo } from 'node:net';
+import test from 'node:test';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { getConfig, resetConfigForTests } from '../src/config.js';
+import { DelegationService } from '../src/delegation-service.js';
+import { createHttpApp } from '../src/mcp-server.js';
+import { WorkspaceRegistry } from '../src/workspace-registry.js';
+
+test('official MCP client lists explicit tools and calls delegation_health', async () => {
+  resetConfigForTests();
+  const config = getConfig({
+    NODE_ENV: 'test',
+    MCP_BIND: '127.0.0.1',
+    MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+    MCP_AUTH_MODE: 'none',
+    CODEX_ENABLED: 'true',
+    LOCAL_EXECUTOR_ENABLED: 'false',
+    SPECIALIST_AGENT_ENABLED: 'false',
+  });
+  const workspaces = WorkspaceRegistry.fromDocument({
+    defaultWorkspaceId: 'test-workspace',
+    workspaces: [{
+      workspaceId: 'test-workspace',
+      root: process.cwd(),
+      readRoots: ['.'],
+      writeRoots: [],
+      allowedExecutables: [],
+      allowedScripts: [],
+      scheduledTaskPrefix: 'TEST-',
+      allowCodexRead: true,
+      allowLocalRead: false,
+      allowLocalWrite: false,
+    }],
+  });
+  const service = new DelegationService(config, workspaces);
+  const app = createHttpApp(service, config);
+  const httpServer = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('listening', resolve);
+    httpServer.once('error', reject);
+  });
+  const address = httpServer.address() as AddressInfo;
+  const client = new Client({ name: 'bridge-integration-test', version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(
+    new URL(`http://127.0.0.1:${address.port}${config.mcpPath}`),
+  );
+  try {
+    await client.connect(transport);
+    const tools = await client.listTools();
+    const names = tools.tools.map((tool) => tool.name);
+    assert.ok(names.includes('delegation_health'));
+    assert.ok(names.includes('ask_codex'));
+    assert.equal(names.includes('execute_codex'), false);
+    assert.equal(names.includes('inspect_local_runtime'), false);
+    assert.equal(names.includes('execute_local_operations'), false);
+    assert.equal(names.includes('ask_specialist_agent'), false);
+
+    const codex = tools.tools.find((tool) => tool.name === 'ask_codex');
+    assert.equal(codex?.annotations?.readOnlyHint, true);
+    assert.match(codex?.description ?? '', /never applies changes|read-only/iu);
+
+    const result = await client.callTool({ name: 'delegation_health', arguments: {} });
+    assert.equal(result.isError, undefined);
+    const structured = result.structuredContent as Record<string, unknown>;
+    const architecture = structured.architecture as Record<string, unknown>;
+    assert.equal(architecture.chatgptPrimaryBrain, true);
+    assert.equal(architecture.backendManagerAgent, false);
+    assert.equal(architecture.automaticBackendRouting, false);
+    assert.equal(architecture.v2RuntimeDependency, false);
+    assert.equal(architecture.specialistAiMayMutateUserWorkspace, false);
+  } finally {
+    await client.close().catch(() => undefined);
+    await new Promise<void>((resolve, reject) => {
+      httpServer.close((error) => error ? reject(error) : resolve());
+    });
+    resetConfigForTests();
+  }
+});
