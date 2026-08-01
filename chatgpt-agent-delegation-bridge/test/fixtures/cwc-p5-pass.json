@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "1.0.0",
+  "phase": "CWC-P5",
+  "status": "PASS",
+  "testedAt": "2026-08-01T12:00:00.000Z",
+  "workspacePlan": "PRO",
+  "clientSurface": "WEB",
+  "developerModeAvailable": true,
+  "tunnelReady": true,
+  "appCreated": true,
+  "tunnelIdSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "toolNames": [
+    "delegation_health",
+    "ask_codex",
+    "inspect_local_runtime"
+  ],
+  "blockReason": "",
+  "delegationHealth": {
+    "architecture": {
+      "chatgptPrimaryBrain": true,
+      "backendManagerAgent": false,
+      "automaticBackendRouting": false,
+      "separateChatUi": false,
+      "persistentBusinessState": false,
+      "v2RuntimeDependency": false,
+      "specialistAiMayMutateUserWorkspace": false
+    },
+    "targets": {
+      "localExecutor": {
+        "enabled": true,
+        "readAvailable": true,
+        "writeAvailable": false,
+        "publishedMode": "READ_ONLY"
+      }
+    }
+  }
+}
