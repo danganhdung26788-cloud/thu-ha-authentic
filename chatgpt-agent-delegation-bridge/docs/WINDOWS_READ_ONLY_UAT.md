@@ -1,6 +1,6 @@
 # Windows read-only UAT
 
-This procedure validates the delegation bridge locally without connecting it to ChatGPT and without enabling write access.
+This procedure validates the delegation bridge locally without connecting it to ChatGPT and without enabling local write access.
 
 ## Product gate
 
@@ -14,7 +14,8 @@ Do not create another user interface to bypass the plan limitation.
 CHATGPT_PRIMARY_BRAIN=true
 BACKEND_MANAGER_AGENT=false
 AUTOMATIC_BACKEND_ROUTING=false
-CODEX_WRITE=false
+SPECIALIST_AI_MUTATION=false
+CODEX_MODE=READ_ONLY_PROPOSAL
 LOCAL_WRITE=false
 AUTOSTART=false
 CONNECTED_TO_CHATGPT=false
@@ -31,7 +32,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 .\scripts\windows\Install-BridgeReadOnly.ps1
 ```
 
-The script creates local `.env` and `config/workspaces.json` only when missing. It uses locked dependencies, runs TypeScript checks, tests, and build. It does not register a Scheduled Task or enable write access.
+The script creates local `.env` and `config/workspaces.json` only when missing. It uses locked dependencies, runs TypeScript checks, tests, and build. It does not register a Scheduled Task, enable local write access, or expose a specialist-AI mutation tool.
 
 ## Start locally
 
@@ -56,6 +57,7 @@ Expected:
 
 ```text
 BRIDGE_HTTP_HEALTH=PASS
+BRIDGE_SERVICE_IDENTITY=PASS
 BRIDGE_MCP_PROTOCOL=PASS
 CHATGPT_PRIMARY_BRAIN=true
 BACKEND_MANAGER_AGENT=false
@@ -63,7 +65,7 @@ V2_RUNTIME_DEPENDENCY=false
 CONNECTED_TO_CHATGPT=false
 ```
 
-The test uses the official MCP client to initialize the connection, list tools, and call `delegation_health`.
+The test uses the official MCP client to initialize the connection, list tools, call `delegation_health`, and verify that no direct Codex mutation tool is exposed.
 
 ## Stop
 
@@ -91,7 +93,9 @@ NO_NEW_UI=PASS
 NO_DATABASE=PASS
 NO_QUEUE=PASS
 NO_BACKEND_MANAGER=PASS
-READ_ONLY_DEFAULTS=PASS
+SPECIALIST_AI_MUTATION=FALSE
+CODEX_READ_ONLY_PROPOSAL=PASS
+LOCAL_WRITE_DEFAULT=BLOCKED
 NO_AUTOSTART=PASS
 ```
 
