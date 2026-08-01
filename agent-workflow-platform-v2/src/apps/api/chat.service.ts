@@ -9,6 +9,7 @@ import type { ChatIdentity, ConversationSnapshot } from '../../chat/types.js';
 import { getEnv } from '../../config/env.js';
 import { redactSecrets } from '../../diagnostics/redaction.js';
 import { modelProviderHealthCheck } from '../../models/model-provider.js';
+import { scanBufferForMalware } from '../../security/clamav-scanner.js';
 import { PlatformService } from './platform.service.js';
 
 const MessageInputSchema = z.object({
@@ -152,6 +153,10 @@ export class ChatService {
         maxAttachmentBytes: env.CHAT_MAX_ATTACHMENT_BYTES,
         maxAttachmentsPerMessage: 20,
       },
+      malwareScanning: {
+        required: env.CLAMAV_REQUIRED,
+        scanner: 'clamav',
+      },
     };
   }
 
@@ -185,6 +190,10 @@ export class ChatService {
       throw new Error(`Tệp vượt giới hạn ${env.CHAT_MAX_ATTACHMENT_BYTES} byte.`);
     }
     assertAttachmentSignature(extension, content);
+    const malwareScan = await scanBufferForMalware(content);
+    if (!malwareScan.clean) {
+      throw new Error(`Tệp bị từ chối do phát hiện mã độc: ${malwareScan.signature ?? 'UNKNOWN'}`);
+    }
     const storageToken = `FILE-${randomUUID()}`;
     const ownerSegment = identity.ownerId.replace(/[^a-zA-Z0-9._-]/g, '_');
     const workspaceSegment = identity.workspaceId.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -218,7 +227,14 @@ export class ChatService {
       mediaType: input.mediaType,
       sizeBytes: content.length,
       sha256,
-      metadata: { extension, storage: 'WORKSPACE_BIND_MOUNT', signatureChecked: true },
+      metadata: {
+        extension,
+        storage: 'WORKSPACE_BIND_MOUNT',
+        signatureChecked: true,
+        malwareScanner: malwareScan.scanner,
+        malwareScanResult: 'CLEAN',
+        malwareScanResponse: malwareScan.response,
+      },
     });
     return { attachment };
   }
