@@ -115,3 +115,34 @@ test('same local executor idempotency key returns original result without a seco
     resetConfigForTests();
   }
 });
+
+test('same idempotency key is isolated between inspection and mutation tools', async () => {
+  const { root, service } = await fixture();
+  try {
+    const inspection = await service.inspectLocalRuntime({
+      workspaceId: 'test',
+      kind: 'system',
+      idempotencyKey: 'shared-tool-key-001',
+    });
+    assert.equal(inspection.status, 'SUCCEEDED');
+    assert.equal(inspection.result.kind, 'system');
+
+    const mutation = await service.executeLocalOperations({
+      objective: 'Write after an unrelated inspection using the same external key.',
+      workspaceId: 'test',
+      operations: [{
+        toolId: 'filesystem.write',
+        input: { path: 'out/namespaced.txt', content: 'namespaced-result' },
+      }],
+      readPaths: ['.'],
+      writePaths: ['out'],
+      idempotencyKey: 'shared-tool-key-001',
+    });
+    assert.equal(mutation.status, 'SUCCEEDED');
+    assert.equal(mutation.target, 'LOCAL_EXECUTOR');
+    assert.equal(await readFile(join(root, 'out', 'namespaced.txt'), 'utf8'), 'namespaced-result');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    resetConfigForTests();
+  }
+});
