@@ -109,15 +109,15 @@ export class WorkspaceRegistry {
     workspaceId: string;
     codexRead: boolean;
     codexWrite: boolean;
-    hermesRead: boolean;
-    hermesWrite: boolean;
+    localRead: boolean;
+    localWrite: boolean;
   }>> {
     return this.#document.workspaces.map((workspace) => ({
       workspaceId: workspace.workspaceId,
       codexRead: workspace.allowCodexRead,
       codexWrite: workspace.allowCodexWrite,
-      hermesRead: workspace.allowHermesRead,
-      hermesWrite: workspace.allowHermesWrite,
+      localRead: workspace.allowLocalRead,
+      localWrite: workspace.allowLocalWrite,
     }));
   }
 
