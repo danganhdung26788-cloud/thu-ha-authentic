@@ -132,7 +132,12 @@ Write-Host 'Starting isolated V2 control plane and local Manager model...'
 & docker.exe compose --env-file .env -f compose.yml up -d --build
 if ($LASTEXITCODE -ne 0) { throw 'Docker Compose deployment failed.' }
 
-& (Join-Path $ScriptDirectory 'Register-AgentV2ScheduledTasks.ps1') -ProjectRoot $ProjectRoot
+try {
+  & (Join-Path $ScriptDirectory 'Register-AgentV2ScheduledTasks.ps1') -ProjectRoot $ProjectRoot
+} catch {
+  Write-Warning ('Scheduled adapter registration did not remain healthy. Direct self-heal will be used: ' + $_.Exception.Message)
+}
+& (Join-Path $ScriptDirectory 'Start-AgentV2HostAdapters.ps1') -ProjectRoot $ProjectRoot
 & (Join-Path $ScriptDirectory 'Install-WorkflowV2ChatApp.ps1') -ProjectRoot $ProjectRoot
 Start-Sleep -Seconds 8
 & (Join-Path $ScriptDirectory 'Test-AgentV2.ps1') -ProjectRoot $ProjectRoot

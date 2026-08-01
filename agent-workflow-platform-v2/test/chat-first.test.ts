@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {
+  objectiveIsVietnamese,
+  SPECIALIST_INSTRUCTIONS,
+} from '../src/agents/specialist-agent.js';
 import { ROUTING_SCENARIOS } from '../src/benchmark/routing-scenarios.js';
 import { compileChatTask } from '../src/chat/task-compiler.js';
 import { getEnv, resetEnvForTests } from '../src/config/env.js';
@@ -169,10 +173,23 @@ test('chat UI is the simple default surface and hides technical task fields', ()
   assert.match(CHAT_PAGE, /Giao việc bằng một câu chat/);
   assert.match(CHAT_PAGE, /Sao chép để hỏi ChatGPT/);
   assert.match(CHAT_PAGE, /kéo thả tài liệu/i);
+  assert.match(CHAT_PAGE, /bootstrap\.ready===true/);
+  assert.match(CHAT_PAGE, /p\.taskId\|\|'SYSTEM'/);
+  assert.match(CHAT_PAGE, /Tiến độ nhiệm vụ/);
   assert.doesNotMatch(CHAT_PAGE, /Dán API_AUTH_TOKEN/);
   assert.doesNotMatch(CHAT_PAGE, /taskRisk/);
   assert.doesNotMatch(CHAT_PAGE, /taskRead/);
   assert.doesNotMatch(CHAT_PAGE, /taskWrite/);
+  assert.doesNotMatch(CHAT_PAGE, /m\.taskId\?/);
+});
+
+test('local specialist contract detects Vietnamese and forbids meta-only answers', () => {
+  assert.equal(objectiveIsVietnamese('Mức độ khó nào phù hợp với AI nào?'), true);
+  assert.equal(objectiveIsVietnamese('Assess this task and report the result.'), false);
+  assert.match(SPECIALIST_INSTRUCTIONS, /same language as the user/i);
+  assert.match(SPECIALIST_INSTRUCTIONS, /Answer the user directly/i);
+  assert.match(SPECIALIST_INSTRUCTIONS, /provisional answer/i);
+  assert.match(SPECIALIST_INSTRUCTIONS, /summary must be the actual answer/i);
 });
 
 test('Manager schema supports genuine business clarification without technical fields', () => {
