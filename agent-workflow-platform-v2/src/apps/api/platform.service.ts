@@ -6,6 +6,7 @@ import { MinioEvidenceStore } from '../../evidence/minio-evidence-store.js';
 import { createExecutorRegistry } from '../../executors/registry.js';
 import { modelProviderHealthCheck } from '../../models/model-provider.js';
 import { createTaskQueue } from '../../queue/task-queue.js';
+import { clamAvHealthCheck } from '../../security/clamav-scanner.js';
 
 const SubmitTaskSchema = z.object({
   taskId: z.string().min(1).optional(),
@@ -98,13 +99,15 @@ export class PlatformService implements OnApplicationShutdown {
     );
     const adapters = adapterChecks.every(Boolean);
     const model = await modelProviderHealthCheck().then((status) => status.ok).catch(() => false);
+    const malwareScanner = await clamAvHealthCheck().catch(() => false);
     return {
       db,
       redis,
       evidence,
       adapters,
       model,
-      ready: db && redis && evidence && adapters && model,
+      malwareScanner,
+      ready: db && redis && evidence && adapters && model && malwareScanner,
     };
   }
 
