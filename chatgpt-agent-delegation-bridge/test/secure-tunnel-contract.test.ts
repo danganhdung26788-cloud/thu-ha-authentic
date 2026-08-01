@@ -24,6 +24,16 @@ test('secure tunnel UAT remains outbound-only, read-only, and secret-safe', asyn
   assert.doesNotMatch(script, /Register-ScheduledTask|schtasks(?:\.exe)?\s+\/Create/iu);
 });
 
+test('secure tunnel UAT recreates and verifies the isolated profile for the requested tunnel', async () => {
+  const script = await source('scripts/windows/Invoke-SecureMcpTunnelReadOnlyUat.ps1');
+  assert.match(script, /Remove-Item\s+-LiteralPath\s+\$profilePath/);
+  assert.match(script, /Generated tunnel profile is not bound to the requested tunnel ID/);
+  assert.match(script, /Generated tunnel profile is not bound to the local MCP bridge URL/);
+  assert.match(script, /profileRecreated\s*=\s*\$profileRecreated/);
+  assert.match(script, /tunnelIdSha256\s*=\s*\$tunnelIdHash/);
+  assert.doesNotMatch(script, /tunnelId\s*=\s*\$TunnelId/);
+});
+
 test('secure tunnel stop command verifies process identity before termination', async () => {
   const script = await source('scripts/windows/Stop-SecureMcpTunnel.ps1');
   assert.match(script, /ExecutablePath/);
