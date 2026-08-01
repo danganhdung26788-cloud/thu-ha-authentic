@@ -4,26 +4,21 @@ import { pathToFileURL } from 'node:url';
 const HEX64 = /^[a-f0-9]{64}$/u;
 const HEX40 = /^[a-f0-9]{40}$/u;
 const STATUSES = new Set(['BLOCKED', 'CANDIDATE_READY_NOT_ACTIVATED', 'ACTIVATED', 'ROLLED_BACK']);
+const CANDIDATE_ARTIFACTS = Object.freeze(['p3Evidence', 'p4Evidence', 'p5Evidence', 'p6Evidence', 'readOnlyConfig', 'writeConfig']);
 
-function fail(message) {
-  throw new Error(message);
-}
-
+function fail(message) { throw new Error(message); }
 function object(value, name) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`${name} must be an object.`);
   return value;
 }
-
 function bool(value, name) {
   if (typeof value !== 'boolean') fail(`${name} must be boolean.`);
   return value;
 }
-
 function text(value, name) {
   if (typeof value !== 'string' || !value.trim()) fail(`${name} must be a non-empty string.`);
   return value.trim();
 }
-
 function rejectSecrets(raw) {
   const patterns = [
     /sk-[A-Za-z0-9_-]{16,}/u,
@@ -31,9 +26,7 @@ function rejectSecrets(raw) {
     /BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY/u,
     /"(?:apiKey|authToken|accessToken|refreshToken|password|tunnelId)"\s*:/iu,
   ];
-  if (patterns.some((pattern) => pattern.test(raw))) {
-    fail('Release evidence contains a secret-like field or raw tunnel ID.');
-  }
+  if (patterns.some((pattern) => pattern.test(raw))) fail('Release evidence contains a secret-like field or raw tunnel ID.');
 }
 
 export function validateReleaseEvidence(document, raw = JSON.stringify(document)) {
@@ -66,6 +59,12 @@ export function validateReleaseEvidence(document, raw = JSON.stringify(document)
   if (bool(document.monitoringReady, 'monitoringReady') !== true) fail('monitoringReady must be true.');
   if (bool(document.backupReady, 'backupReady') !== true) fail('backupReady must be true.');
 
+  if (status === 'CANDIDATE_READY_NOT_ACTIVATED' || status === 'ACTIVATED') {
+    for (const name of CANDIDATE_ARTIFACTS) {
+      if (!HEX64.test(text(artifacts[name], `artifacts.${name}`))) fail(`${status} requires artifacts.${name}.`);
+    }
+  }
+
   if (status === 'CANDIDATE_READY_NOT_ACTIVATED') {
     if (bool(document.ownerApproval, 'ownerApproval') !== false) fail('Candidate must not claim owner approval.');
     if (bool(document.production, 'production') !== false) fail('Candidate must not claim production activation.');
@@ -82,6 +81,7 @@ export function validateReleaseEvidence(document, raw = JSON.stringify(document)
   }
 
   if (status === 'ROLLED_BACK') {
+    if (!HEX64.test(text(artifacts.readOnlyConfig, 'artifacts.readOnlyConfig'))) fail('ROLLED_BACK requires artifacts.readOnlyConfig.');
     if (bool(document.production, 'production') !== false) fail('ROLLED_BACK requires production=false.');
     text(document.rollbackId, 'rollbackId');
     text(document.rolledBackAt, 'rolledBackAt');
@@ -98,9 +98,7 @@ async function main() {
   if (!path) throw new Error('Usage: node scripts/validate-cwc-p7-release-evidence.mjs <evidence.json> [--require-activated]');
   const raw = await readFile(path, 'utf8');
   const result = validateReleaseEvidence(JSON.parse(raw), raw);
-  if (requireActivated && result.status !== 'ACTIVATED') {
-    throw new Error(`CWC-P7 evidence is valid but status is ${result.status}.`);
-  }
+  if (requireActivated && result.status !== 'ACTIVATED') throw new Error(`CWC-P7 evidence is valid but status is ${result.status}.`);
   process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
 }
 
