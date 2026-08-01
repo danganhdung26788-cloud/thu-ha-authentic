@@ -40,9 +40,13 @@ if ($health.status -ne 'ok') { throw 'API health check failed.' }
 $ready = Invoke-RestMethod -Uri 'http://127.0.0.1:3100/ready' -TimeoutSec 60
 if (-not $ready.ready) { throw 'API readiness check failed.' }
 if (-not $ready.model) { throw 'Local Manager model readiness check failed.' }
+if (-not $ready.malwareScanner) { throw 'Local malware scanner readiness check failed.' }
 
 $appResponse = Invoke-WebRequest -Uri 'http://127.0.0.1:3100/app' -UseBasicParsing -TimeoutSec 30
-if ($appResponse.StatusCode -ne 200 -or $appResponse.Content -notmatch 'Giao việc bằng một câu chat') {
+$appMarkersPresent = $appResponse.Content -match '<title>Workflow AI</title>' `
+  -and $appResponse.Content -match 'id="composer"' `
+  -and $appResponse.Content -match 'id="message"'
+if ($appResponse.StatusCode -ne 200 -or -not $appMarkersPresent) {
   throw 'Chat-first application entrypoint check failed.'
 }
 if (-not $appResponse.Headers['Set-Cookie']) {
