@@ -19,6 +19,8 @@ type TaskRow = Readonly<{
   idempotency_key: string;
   owner_id: string;
   workspace_id: string;
+  conversation_id: string | null;
+  source_message_id: string | null;
   objective: string;
   read_scope: unknown;
   write_scope: unknown;
@@ -49,6 +51,8 @@ function mapTask(row: TaskRow): TaskRecord {
     idempotencyKey: row.idempotency_key,
     ownerId: row.owner_id,
     workspaceId: row.workspace_id,
+    conversationId: row.conversation_id,
+    sourceMessageId: row.source_message_id,
     objective: row.objective,
     readScope: row.read_scope,
     writeScope: row.write_scope,
@@ -91,13 +95,14 @@ export class PostgresControlPlaneStore implements ControlPlaneStore {
       const inserted = await client.query<TaskRow>(
         `INSERT INTO tasks(
           task_id, correlation_id, idempotency_key, owner_id, workspace_id,
-          objective, read_scope, write_scope, autonomy_mode, risk_level,
-          payload, status, max_attempts
-        ) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11::jsonb,'QUEUED',$12)
+          conversation_id, source_message_id, objective, read_scope, write_scope,
+          autonomy_mode, risk_level, payload, status, max_attempts
+        ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13::jsonb,'QUEUED',$14)
         ON CONFLICT(owner_id, workspace_id, idempotency_key) DO NOTHING
         RETURNING *`,
         [input.taskId, input.correlationId, input.idempotencyKey, input.ownerId, input.workspaceId,
-          input.objective, JSON.stringify(input.readScope), JSON.stringify(input.writeScope),
+          input.conversationId, input.sourceMessageId, input.objective,
+          JSON.stringify(input.readScope), JSON.stringify(input.writeScope),
           input.autonomyMode, input.riskLevel, JSON.stringify(input.payload), input.maxAttempts],
       );
       const newRow = inserted.rows[0];
