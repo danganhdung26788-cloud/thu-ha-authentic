@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -9,6 +9,8 @@ import { WorkspaceRegistry } from '../src/workspace-registry.js';
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'delegation-codex-boundary-'));
+  await mkdir(join(root, 'allowed'), { recursive: true });
+  await mkdir(join(root, 'private'), { recursive: true });
   resetConfigForTests();
   const config = getConfig({
     NODE_ENV: 'test',
@@ -21,13 +23,12 @@ async function fixture() {
     workspaces: [{
       workspaceId: 'test',
       root,
-      readRoots: ['.'],
+      readRoots: ['allowed'],
       writeRoots: [],
       allowedExecutables: [],
       allowedScripts: [],
       scheduledTaskPrefix: 'TEST-',
       allowCodexRead: true,
-      allowCodexWrite: false,
       allowLocalRead: false,
       allowLocalWrite: false,
     }],
@@ -43,7 +44,7 @@ test('ask_codex rejects focus paths outside the registered workspace before SDK 
         objective: 'Inspect a path outside the workspace.',
         workspaceId: 'test',
         paths: ['../outside'],
-        idempotencyKey: 'codex-boundary-read-001',
+        idempotencyKey: 'codex-boundary-workspace-001',
       }),
       /outside the allowlisted workspace/,
     );
@@ -53,17 +54,37 @@ test('ask_codex rejects focus paths outside the registered workspace before SDK 
   }
 });
 
-test('execute_codex rejects focus paths outside the registered workspace before permission or SDK execution', async () => {
+test('ask_codex rejects a path inside the workspace but outside registered read roots', async () => {
   const { root, service } = await fixture();
   try {
     await assert.rejects(
-      service.executeCodex({
-        objective: 'Modify a path outside the workspace.',
+      service.askCodex({
+        objective: 'Inspect a private path that was not granted.',
         workspaceId: 'test',
-        paths: ['../../outside'],
-        idempotencyKey: 'codex-boundary-write-001',
+        paths: ['private'],
+        responseFormat: 'implementation-plan',
+        idempotencyKey: 'codex-boundary-read-root-001',
       }),
-      /outside the allowlisted workspace/,
+      /outside registered read roots/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    resetConfigForTests();
+  }
+});
+
+test('Codex input schema exposes proposal formats but no mutation mode', async () => {
+  const { root, service } = await fixture();
+  try {
+    await assert.rejects(
+      service.askCodex({
+        objective: 'Reject an invalid response mode before SDK execution.',
+        workspaceId: 'test',
+        paths: ['allowed'],
+        responseFormat: 'workspace-write',
+        idempotencyKey: 'codex-boundary-format-001',
+      }),
+      /Invalid option|responseFormat/,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
