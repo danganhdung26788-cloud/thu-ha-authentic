@@ -30,7 +30,6 @@ test('official MCP client lists explicit tools and calls delegation_health', asy
       allowedScripts: [],
       scheduledTaskPrefix: 'TEST-',
       allowCodexRead: true,
-      allowCodexWrite: false,
       allowLocalRead: false,
       allowLocalWrite: false,
     }],
@@ -53,10 +52,14 @@ test('official MCP client lists explicit tools and calls delegation_health', asy
     const names = tools.tools.map((tool) => tool.name);
     assert.ok(names.includes('delegation_health'));
     assert.ok(names.includes('ask_codex'));
-    assert.ok(names.includes('execute_codex'));
+    assert.equal(names.includes('execute_codex'), false);
     assert.equal(names.includes('inspect_local_runtime'), false);
     assert.equal(names.includes('execute_local_operations'), false);
     assert.equal(names.includes('ask_specialist_agent'), false);
+
+    const codex = tools.tools.find((tool) => tool.name === 'ask_codex');
+    assert.equal(codex?.annotations?.readOnlyHint, true);
+    assert.match(codex?.description ?? '', /never applies changes|read-only/iu);
 
     const result = await client.callTool({ name: 'delegation_health', arguments: {} });
     assert.equal(result.isError, undefined);
@@ -66,6 +69,7 @@ test('official MCP client lists explicit tools and calls delegation_health', asy
     assert.equal(architecture.backendManagerAgent, false);
     assert.equal(architecture.automaticBackendRouting, false);
     assert.equal(architecture.v2RuntimeDependency, false);
+    assert.equal(architecture.specialistAiMayMutateUserWorkspace, false);
   } finally {
     await client.close().catch(() => undefined);
     await new Promise<void>((resolve, reject) => {
