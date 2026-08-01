@@ -40,22 +40,11 @@ export class DelegationService {
   async askCodex(raw: unknown): Promise<DelegationResult> {
     const input = CodexDelegationInputSchema.parse(raw);
     const workspace = this.workspaces.get(input.workspaceId);
-    for (const path of input.paths) this.workspaces.resolvePath(workspace, path);
+    for (const path of input.paths) this.workspaces.resolveReadPath(workspace, path);
     return this.deduplicate(
       'ask_codex',
       input.idempotencyKey,
-      () => this.#codex.run('read', workspace, input),
-    );
-  }
-
-  async executeCodex(raw: unknown): Promise<DelegationResult> {
-    const input = CodexDelegationInputSchema.parse(raw);
-    const workspace = this.workspaces.get(input.workspaceId);
-    for (const path of input.paths) this.workspaces.resolvePath(workspace, path);
-    return this.deduplicate(
-      'execute_codex',
-      input.idempotencyKey,
-      () => this.#codex.run('write', workspace, input),
+      () => this.#codex.run(workspace, input),
     );
   }
 
@@ -100,13 +89,18 @@ export class DelegationService {
         separateChatUi: false,
         persistentBusinessState: false,
         v2RuntimeDependency: false,
+        specialistAiMayMutateUserWorkspace: false,
       },
       targets: {
-        codex: { enabled: this.config.codex.enabled },
+        codex: {
+          enabled: this.config.codex.enabled,
+          mode: 'READ_ONLY_PROPOSAL',
+        },
         localExecutor: this.#localExecutor.health(),
         specialistAgent: {
           enabled: this.config.specialist.enabled,
           modelConfigured: Boolean(this.config.specialist.model),
+          mode: 'ANSWER_ONLY',
         },
       },
       workspaces: this.workspaces.list(),
