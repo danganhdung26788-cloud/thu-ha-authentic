@@ -50,18 +50,44 @@ function Get-CommandOutput([scriptblock]$Operation) {
   }
 }
 
+function Get-AdapterLogOutput {
+  $files = @(
+    'hermes.process.stdout.log',
+    'hermes.process.stderr.log',
+    'hermes.stdout.log',
+    'hermes.stderr.log',
+    'codex.process.stdout.log',
+    'codex.process.stderr.log',
+    'codex.stdout.log',
+    'codex.stderr.log'
+  )
+  $sections = @()
+  foreach ($name in $files) {
+    $path = Join-Path $logDirectory $name
+    if (Test-Path $path) {
+      $tail = (Get-Content -LiteralPath $path -Tail 80 -ErrorAction SilentlyContinue | Out-String).Trim()
+      $sections += "=== $name ===`r`n$tail"
+    }
+  }
+  if ($sections.Count -eq 0) { return 'No adapter logs were found.' }
+  return ($sections -join "`r`n`r`n")
+}
+
 function Write-StartupDiagnostic([System.Exception]$Failure) {
   $commit = Get-CommandOutput { & git.exe rev-parse HEAD }
   $tasks = Get-CommandOutput {
-    foreach ($name in @('Hermes-V2-Hermes-HostAdapter', 'Hermes-V2-Codex-HostAdapter', 'Hermes-V2-ChatApp')) {
-      $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
-      if ($null -eq $task) {
-        [PSCustomObject]@{ TaskName = $name; State = 'MISSING'; LastTaskResult = $null }
-      } else {
-        $info = Get-ScheduledTaskInfo -TaskName $name
-        [PSCustomObject]@{ TaskName = $name; State = $task.State; LastTaskResult = $info.LastTaskResult }
+    $rows = @(
+      foreach ($name in @('Hermes-V2-Hermes-HostAdapter', 'Hermes-V2-Codex-HostAdapter', 'Hermes-V2-ChatApp')) {
+        $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+        if ($null -eq $task) {
+          [PSCustomObject]@{ TaskName = $name; State = 'MISSING'; LastTaskResult = $null }
+        } else {
+          $info = Get-ScheduledTaskInfo -TaskName $name
+          [PSCustomObject]@{ TaskName = $name; State = $task.State; LastTaskResult = $info.LastTaskResult }
+        }
       }
-    }
+    )
+    $rows | Format-Table -AutoSize
   }
   $ports = Get-CommandOutput {
     Get-NetTCPConnection -State Listen -LocalPort 3100,3201,3202 -ErrorAction SilentlyContinue |
@@ -70,6 +96,7 @@ function Write-StartupDiagnostic([System.Exception]$Failure) {
   }
   $compose = Get-CommandOutput { & docker.exe compose --env-file .env -f compose.yml ps }
   $logs = Get-CommandOutput { & docker.exe compose --env-file .env -f compose.yml logs --tail 80 api worker ollama clamav }
+  $adapterLogs = Get-AdapterLogOutput
   $report = @"
 WORKFLOW AI V2 - STARTUP DIAGNOSTIC
 
@@ -87,8 +114,11 @@ $ports
 Docker Compose:
 $compose
 
-Recent logs:
+Recent Docker logs:
 $logs
+
+Host adapter logs:
+$adapterLogs
 
 Secrets were automatically redacted before display.
 
@@ -124,21 +154,13 @@ function Start-DockerDesktopIfNeeded {
   throw 'Docker Desktop did not become ready within four minutes.'
 }
 
-function Start-AdapterTask([string]$TaskName) {
-  $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-  if ($null -eq $task) { throw "Required Scheduled Task is missing: $TaskName" }
-  if ($task.State -ne 'Running') {
-    Start-ScheduledTask -TaskName $TaskName
-  }
-}
-
 function Wait-ChatReady {
   $deadline = (Get-Date).AddMinutes(12)
   $lastError = 'No readiness response received.'
   while ((Get-Date) -lt $deadline) {
     try {
       $status = Invoke-RestMethod -Uri 'http://127.0.0.1:3100/ready' -TimeoutSec 10
-      if ($status.ready -eq $true -and $status.model -eq $true -and $status.malwareScanner -eq $true) { return }
+      if ($status.ready -eq $true -and $status.model -eq $true -and $status.malwareScanner -eq $true -and $status.adapters -eq $true) { return }
       $lastError = ($status | ConvertTo-Json -Compress)
     } catch {
       $lastError = $_.Exception.Message
@@ -158,8 +180,9 @@ try {
   Write-LauncherLog 'Docker Desktop is ready.'
   & docker.exe compose --env-file .env -f compose.yml up -d
   if ($LASTEXITCODE -ne 0) { throw 'Docker Compose startup failed.' }
-  Start-AdapterTask 'Hermes-V2-Hermes-HostAdapter'
-  Start-AdapterTask 'Hermes-V2-Codex-HostAdapter'
+
+  & (Join-Path $ScriptDirectory 'Start-AgentV2HostAdapters.ps1') -ProjectRoot $ProjectRoot
+  Write-LauncherLog 'Host adapters are ready.'
   Wait-ChatReady
   Write-LauncherLog 'Workflow AI chat readiness PASS.'
   if (-not $NoBrowser) {
