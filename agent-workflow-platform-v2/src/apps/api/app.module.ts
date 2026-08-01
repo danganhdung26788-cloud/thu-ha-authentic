@@ -6,6 +6,10 @@ import { AgentController } from './agent.controller.js';
 import { AgentRegistryService } from './agent-registry.service.js';
 import { ApiTokenGuard } from './api-token.guard.js';
 import { ApprovalController } from './approval.controller.js';
+import { ChatController } from './chat.controller.js';
+import { ChatService } from './chat.service.js';
+import { ChatSessionGuard } from './chat-session.js';
+import { ChatWebController } from './chat-web.controller.js';
 import { CutoverController } from './cutover.controller.js';
 import { HealthController } from './health.controller.js';
 import { PlatformService } from './platform.service.js';
@@ -15,6 +19,8 @@ import { ToolController } from './tool.controller.js';
 @Module({
   controllers: [
     HealthController,
+    ChatWebController,
+    ChatController,
     AdminWebController,
     AdminController,
     TaskController,
@@ -25,9 +31,11 @@ import { ToolController } from './tool.controller.js';
   ],
   providers: [
     PlatformService,
+    ChatService,
     AdminQueryService,
     AgentRegistryService,
     ApiTokenGuard,
+    ChatSessionGuard,
   ],
 })
 export class AppModule {}
