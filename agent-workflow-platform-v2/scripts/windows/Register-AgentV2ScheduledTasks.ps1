@@ -48,6 +48,31 @@ function Get-PortListeners([int]$Port) {
   )
 }
 
+function Test-TaskActionMatches(
+  [object]$ScheduledTask,
+  [string]$ExpectedExecute,
+  [string]$ExpectedArguments,
+  [string]$ExpectedWorkingDirectory
+) {
+  if ($null -eq $ScheduledTask) { return $false }
+  $actions = @($ScheduledTask.Actions)
+  if ($actions.Count -ne 1) { return $false }
+  $existingAction = $actions[0]
+  return [string]::Equals(
+    [string]$existingAction.Execute,
+    $ExpectedExecute,
+    [System.StringComparison]::OrdinalIgnoreCase
+  ) -and [string]::Equals(
+    [string]$existingAction.Arguments,
+    $ExpectedArguments,
+    [System.StringComparison]::Ordinal
+  ) -and [string]::Equals(
+    [string]$existingAction.WorkingDirectory,
+    $ExpectedWorkingDirectory,
+    [System.StringComparison]::OrdinalIgnoreCase
+  )
+}
+
 function Stop-StaleAdapterListener(
   [string]$Role,
   [int]$Port,
@@ -162,6 +187,13 @@ foreach ($roleConfig in $roles) {
   $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
 
   if ($PSCmdlet.ShouldProcess($taskName, 'Register or update direct Node Scheduled Task')) {
+    $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    $canReuse = Test-TaskActionMatches `
+      -ScheduledTask $existingTask `
+      -ExpectedExecute $nodePath `
+      -ExpectedArguments $arguments `
+      -ExpectedWorkingDirectory $ProjectRoot
+
     Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
     Stop-StaleAdapterListener `
@@ -170,9 +202,23 @@ foreach ($roleConfig in $roles) {
       -ExpectedEntrypoint $entrypoint `
       -ExpectedEnvFile $envFile
 
-    Register-ScheduledTask -TaskName $taskName -InputObject $task -Force | Out-Null
+    if (-not $canReuse) {
+      try {
+        Register-ScheduledTask -TaskName $taskName -InputObject $task -Force -ErrorAction Stop | Out-Null
+      } catch {
+        if ($_.Exception.Message -match 'Access is denied|0x80070005') {
+          throw "Scheduled Task $taskName needs a one-time elevated repair because its stored action differs. Run the installer once as Administrator."
+        }
+        throw
+      }
+    }
+
     Start-ScheduledTask -TaskName $taskName
     Wait-AdapterHealth -Role $role -Port $port -TaskName $taskName -Token $token
-    Write-Host "Registered, started and authenticated-health-verified $taskName with direct node.exe lifecycle"
+    if ($canReuse) {
+      Write-Host "Reused, restarted and authenticated-health-verified $taskName"
+    } else {
+      Write-Host "Registered, started and authenticated-health-verified $taskName with direct node.exe lifecycle"
+    }
   }
 }
