@@ -4,14 +4,14 @@ This package rebuilds SYSTEM AI WORKFLOW around the correct center:
 
 > ChatGPT inside the project is the primary brain and the only normal user interface.
 
-ChatGPT answers directly and uses its native/connected tools whenever possible. It calls this MCP bridge only when it intentionally needs a specialist AI or bounded external executor.
+ChatGPT answers directly and uses its native/connected tools whenever possible. It calls this MCP bridge only when it intentionally needs a specialist AI or a bounded local capability.
 
 ## What this is
 
 - a small stateless MCP server;
-- explicit specialist tools selected by ChatGPT;
+- explicit tools selected by ChatGPT;
 - Codex delegation through the official Codex SDK;
-- direct bounded Hermes-style host execution inside this package;
+- bounded local runtime inspection and execution under server-side policy;
 - optional specialist agents through OpenAI Agents SDK;
 - structured results returned to the same ChatGPT conversation.
 
@@ -24,7 +24,8 @@ ChatGPT answers directly and uses its native/connected tools whenever possible. 
 - not a PostgreSQL/Redis/BullMQ system;
 - not a Shadow/cutover path away from ChatGPT;
 - not an automatic fallback to a paid provider;
-- not dependent on `agent-workflow-platform-v2` at runtime.
+- not dependent on `agent-workflow-platform-v2` at runtime;
+- not a claim that local file or PowerShell operations are an AI named Hermes.
 
 ## Architecture
 
@@ -32,34 +33,34 @@ ChatGPT answers directly and uses its native/connected tools whenever possible. 
 ChatGPT project
   ├─ direct answer/reasoning
   ├─ native tools and connected apps
-  └─ explicit MCP tool call when a specialist is needed
-       ├─ ask_codex             read-only
-       ├─ execute_codex         repository write; host approval
-       ├─ inspect_with_hermes   read-only
-       ├─ execute_with_hermes   local mutation; host approval
-       └─ ask_specialist_agent  optional Agents SDK agent
+  └─ explicit MCP call only when needed
+       ├─ ask_codex                Codex AI, read-only
+       ├─ execute_codex            Codex AI, repository write; host approval
+       ├─ inspect_local_runtime    bounded local read-only capability
+       ├─ execute_local_operations bounded local mutation; host approval
+       └─ ask_specialist_agent     optional fixed Agents SDK specialist
 
-Specialist result -> ChatGPT evaluates -> final user response
+Returned result -> ChatGPT evaluates -> final user response
 ```
 
 The bridge never selects a target. Target selection is encoded in the MCP tool name chosen by ChatGPT.
 
 ## Why Agents SDK is not placed in front of every call
 
-Agents SDK runs model-backed agent loops; it is not a transport. Adding a hidden Manager model after ChatGPT has already selected Codex or Hermes would create a second brain, extra latency, duplicate cost, and conflicting decisions.
+Agents SDK runs model-backed agent loops; it is not a transport. Adding a hidden Manager model after ChatGPT has already selected Codex or another specialist would create a second brain, extra latency, duplicate cost, and conflicting decisions.
 
 Therefore:
 
 - Codex uses its official specialist SDK;
-- bounded host operations execute directly under the bridge workspace policy;
-- a model-backed specialist uses Agents SDK;
+- bounded local operations run directly under deterministic policy and are not called an AI;
+- a true model-backed specialist uses Agents SDK;
 - no generic backend Manager is created.
 
 ## Tools
 
 ### `delegation_health`
 
-Reports configured targets and architecture invariants. It does not create a task.
+Reports configured targets, local capabilities, and architecture invariants. It does not create a task.
 
 ### `ask_codex`
 
@@ -69,17 +70,19 @@ Read-only code/repository inspection. Codex runs with `sandboxMode=read-only`. R
 
 Approved repository work. Codex runs with `sandboxMode=workspace-write`, no production deployment, no Git history rewriting, no credential/permission/billing changes, and network disabled by default.
 
-### `inspect_with_hermes`
+### `inspect_local_runtime`
 
-Bounded read-only system/process/service/Scheduled Task/Docker/Git inspection. No V2 adapter, port, or Scheduled Task is required.
+Bounded read-only system/process/service/Scheduled Task/Docker/Git inspection. This is a deterministic local capability, not an AI specialist.
 
-### `execute_with_hermes`
+### `execute_local_operations`
 
-Approved structured operations only. Every operation and read/write scope is explicit. The server independently enforces registered roots, scripts, executables, and Scheduled Task prefixes. Arbitrary inline shell input is not accepted.
+Approved structured local operations only. Every operation and read/write scope is explicit. The server independently enforces registered roots, scripts, executables, and Scheduled Task prefixes. Arbitrary inline shell input is not accepted.
 
 ### `ask_specialist_agent`
 
 Optional Agents SDK specialist. It is registered only when a model and provider credential are explicitly configured. There is no silent fallback.
+
+A real Hermes AI integration, when approved and available, must be added as a separate explicitly named specialist tool that calls the actual Hermes model/service. The local executor must never borrow that name.
 
 ## Security model
 
@@ -152,12 +155,13 @@ Production deployment must include supported authentication, TLS, an allowlisted
 The example registry starts with:
 
 ```text
-Codex read:   allowed
-Codex write:  blocked
-Hermes read:  allowed
-Hermes write: blocked
-Write roots:  none
-Scripts:      none
+Codex read:       allowed
+Codex write:      blocked
+Local read:       allowed
+Local write:      blocked
+Write roots:      none
+Scripts:          none
+Agents specialist disabled
 ```
 
 Write access is enabled only after read-only UAT passes and the ChatGPT tool approval behavior is verified on a plan that supports write tools.
@@ -170,14 +174,15 @@ The first acceptance set is product-first:
 2. Current weather uses ChatGPT weather tooling; bridge is not called.
 3. A repository review calls `ask_codex` exactly once and returns to ChatGPT.
 4. A requested code change selects `execute_codex` and requires approval.
-5. A local runtime inspection selects `inspect_with_hermes`.
-6. A local mutation selects `execute_with_hermes` and requires approval.
+5. A local runtime inspection selects `inspect_local_runtime`.
+6. A local mutation selects `execute_local_operations` and requires approval.
 7. A follow-up remains in ChatGPT conversation context; it does not create a bridge task.
 8. Disabled specialist targets return `BLOCKED`; no fallback occurs.
 9. Duplicate idempotency keys do not execute twice within the process TTL.
 10. The bridge has no chat UI, business database, queue, or backend Manager.
 11. The official MCP client can initialize, list tools, and call `delegation_health`.
-12. Direct Hermes file writes cannot escape registered and request scopes.
+12. Local file writes cannot escape registered and request scopes.
+13. The local executor is never represented as Hermes or another AI model.
 
 ## Legacy V2 boundary
 
