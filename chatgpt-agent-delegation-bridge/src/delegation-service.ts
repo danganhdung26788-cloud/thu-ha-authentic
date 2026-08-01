@@ -40,19 +40,30 @@ export class DelegationService {
   async askCodex(raw: unknown): Promise<DelegationResult> {
     const input = CodexDelegationInputSchema.parse(raw);
     const workspace = this.workspaces.get(input.workspaceId);
-    return this.deduplicate(input.idempotencyKey, () => this.#codex.run('read', workspace, input));
+    for (const path of input.paths) this.workspaces.resolvePath(workspace, path);
+    return this.deduplicate(
+      'ask_codex',
+      input.idempotencyKey,
+      () => this.#codex.run('read', workspace, input),
+    );
   }
 
   async executeCodex(raw: unknown): Promise<DelegationResult> {
     const input = CodexDelegationInputSchema.parse(raw);
     const workspace = this.workspaces.get(input.workspaceId);
-    return this.deduplicate(input.idempotencyKey, () => this.#codex.run('write', workspace, input));
+    for (const path of input.paths) this.workspaces.resolvePath(workspace, path);
+    return this.deduplicate(
+      'execute_codex',
+      input.idempotencyKey,
+      () => this.#codex.run('write', workspace, input),
+    );
   }
 
   async inspectLocalRuntime(raw: unknown): Promise<DelegationResult> {
     const input = LocalInspectInputSchema.parse(raw);
     const workspace = this.workspaces.get(input.workspaceId);
     return this.deduplicate(
+      'inspect_local_runtime',
       input.idempotencyKey,
       () => this.#localExecutor.inspect(workspace, input),
     );
@@ -62,6 +73,7 @@ export class DelegationService {
     const input = LocalExecuteInputSchema.parse(raw);
     const workspace = this.workspaces.get(input.workspaceId);
     return this.deduplicate(
+      'execute_local_operations',
       input.idempotencyKey,
       () => this.#localExecutor.execute(workspace, input),
     );
@@ -69,7 +81,11 @@ export class DelegationService {
 
   async askSpecialist(raw: unknown): Promise<DelegationResult> {
     const input = SpecialistDelegationInputSchema.parse(raw);
-    return this.deduplicate(input.idempotencyKey, () => this.#specialist.run(input));
+    return this.deduplicate(
+      'ask_specialist_agent',
+      input.idempotencyKey,
+      () => this.#specialist.run(input),
+    );
   }
 
   async health(): Promise<Record<string, unknown>> {
@@ -98,20 +114,22 @@ export class DelegationService {
   }
 
   private async deduplicate(
+    namespace: string,
     idempotencyKey: string | undefined,
     operation: () => Promise<DelegationResult>,
   ): Promise<DelegationResult> {
     this.pruneCache();
     if (!idempotencyKey) return this.validateAndBound(await operation());
-    const existing = this.#cache.get(idempotencyKey);
+    const cacheKey = `${namespace}\u0000${idempotencyKey}`;
+    const existing = this.#cache.get(cacheKey);
     if (existing && existing.expiresAt > Date.now()) return existing.promise;
     const promise = operation()
       .then((result) => this.validateAndBound(result))
       .catch((error) => {
-        this.#cache.delete(idempotencyKey);
+        this.#cache.delete(cacheKey);
         throw error;
       });
-    this.#cache.set(idempotencyKey, {
+    this.#cache.set(cacheKey, {
       promise,
       expiresAt: Date.now() + 10 * 60 * 1_000,
     });
