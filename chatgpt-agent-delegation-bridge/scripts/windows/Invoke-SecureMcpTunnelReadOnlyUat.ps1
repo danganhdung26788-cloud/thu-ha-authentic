@@ -88,6 +88,17 @@ function Stop-VerifiedProcess([int]$ProcessId, [string]$ExpectedPath) {
   Stop-Process -Id $ProcessId -Force -ErrorAction Stop
 }
 
+function Get-Sha256([string]$Value) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    return ([System.BitConverter]::ToString(
+      $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Value))
+    )).Replace('-', '').ToLowerInvariant()
+  } finally {
+    $sha.Dispose()
+  }
+}
+
 if ([string]::IsNullOrWhiteSpace($env:CONTROL_PLANE_API_KEY)) {
   throw 'CONTROL_PLANE_API_KEY is required in the current process environment. It will not be written to repository files or receipts.'
 }
@@ -102,6 +113,8 @@ $doctorLogPath = Join-Path $runtimeDirectory 'doctor.log'
 $initLogPath = Join-Path $runtimeDirectory 'init.log'
 $pidPath = Join-Path $runtimeDirectory 'tunnel.pid'
 $receiptPath = Join-Path $runtimeDirectory 'cwc-p4-secure-mcp-tunnel-read-only-uat-latest.json'
+$profilePath = Join-Path $profileDirectory ($Profile + '.yaml')
+$tunnelIdHash = Get-Sha256 -Value $TunnelId
 New-Item -ItemType Directory -Force -Path $profileDirectory | Out-Null
 Remove-Item -LiteralPath $healthUrlFile, $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
 
@@ -114,6 +127,7 @@ $errorMessage = ''
 $healthBaseUrl = ''
 $ready = $false
 $clientVersion = ''
+$profileRecreated = $false
 
 try {
   $bridgeUat = Join-Path $ScriptDirectory 'Invoke-BridgeReadOnlyUat.ps1'
@@ -126,16 +140,25 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Unable to read tunnel-client version.' }
   }
 
-  $profilePath = Join-Path $profileDirectory ($Profile + '.yaml')
+  Remove-Item -LiteralPath $profilePath -Force -ErrorAction SilentlyContinue
+  [void](Invoke-TunnelCommand -Arguments @(
+    'init',
+    '--sample', 'sample_mcp_remote_no_auth',
+    '--profile', $Profile,
+    '--tunnel-id', $TunnelId,
+    '--mcp-server-url', 'http://127.0.0.1:3210/mcp'
+  ) -LogPath $initLogPath)
   if (-not (Test-Path -LiteralPath $profilePath)) {
-    [void](Invoke-TunnelCommand -Arguments @(
-      'init',
-      '--sample', 'sample_mcp_remote_no_auth',
-      '--profile', $Profile,
-      '--tunnel-id', $TunnelId,
-      '--mcp-server-url', 'http://127.0.0.1:3210/mcp'
-    ) -LogPath $initLogPath)
+    throw 'tunnel-client did not create the expected isolated profile.'
   }
+  $profileText = Get-Content -Raw -LiteralPath $profilePath
+  if ($profileText -notmatch [Regex]::Escape($TunnelId)) {
+    throw 'Generated tunnel profile is not bound to the requested tunnel ID.'
+  }
+  if ($profileText -notmatch [Regex]::Escape('http://127.0.0.1:3210/mcp')) {
+    throw 'Generated tunnel profile is not bound to the local MCP bridge URL.'
+  }
+  $profileRecreated = $true
 
   [void](Invoke-TunnelCommand -Arguments @('doctor', '--profile', $Profile, '--explain') -LogPath $doctorLogPath)
 
@@ -211,15 +234,6 @@ try {
     }
   }
 
-  $sha = [System.Security.Cryptography.SHA256]::Create()
-  try {
-    $tunnelIdHash = ([System.BitConverter]::ToString(
-      $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($TunnelId))
-    )).Replace('-', '').ToLowerInvariant()
-  } finally {
-    $sha.Dispose()
-  }
-
   $receipt = [ordered]@{
     schemaVersion = '1.0.0'
     phase = 'CWC-P4'
@@ -228,6 +242,7 @@ try {
     testedAt = (Get-Date).ToUniversalTime().ToString('o')
     tunnelIdSha256 = $tunnelIdHash
     profile = $Profile
+    profileRecreated = $profileRecreated
     tunnelClientVersion = $clientVersion
     localMcpUrl = 'http://127.0.0.1:3210/mcp'
     outboundOnly = $true
@@ -256,6 +271,7 @@ if (-not $passed) {
 
 Write-Host 'CWC_P4_SECURE_MCP_TUNNEL_READ_ONLY_UAT=PASS'
 Write-Host "UAT_RECEIPT=$receiptPath"
+Write-Host 'PROFILE_RECREATED=true'
 Write-Host 'OUTBOUND_ONLY=true'
 Write-Host 'INBOUND_FIREWALL_PORT_REQUIRED=false'
 Write-Host 'CONTROL_PLANE_API_KEY_PERSISTED=false'
