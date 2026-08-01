@@ -45,12 +45,15 @@ if ($authMode -eq 'bearer') {
 }
 
 $health = Invoke-RestMethod -Uri $healthUri -Headers $headers -TimeoutSec 10
-if ($health.ok -ne $true) { throw 'Bridge HTTP health failed.' }
+if ($health.ok -ne $true -or $health.bridge -ne 'chatgpt-primary-delegation') {
+  throw 'Bridge HTTP identity or health check failed.'
+}
 
 & node.exe --env-file=.env .\scripts\smoke-mcp.mjs
 if ($LASTEXITCODE -ne 0) { throw 'Official MCP client smoke test failed.' }
 
 Write-Host 'BRIDGE_HTTP_HEALTH=PASS'
+Write-Host 'BRIDGE_SERVICE_IDENTITY=PASS'
 Write-Host 'BRIDGE_MCP_PROTOCOL=PASS'
 Write-Host 'CHATGPT_PRIMARY_BRAIN=true'
 Write-Host 'BACKEND_MANAGER_AGENT=false'
