@@ -55,6 +55,10 @@ export const EnvSchema = z.object({
   CHAT_ATTACHMENT_SCOPE_ROOT: z.string().min(1).default('runtime/chat-attachments'),
   CHAT_MAX_ATTACHMENT_BYTES: z.coerce.number().int().min(1_024).max(104_857_600).default(26_214_400),
   CHAT_MAX_DIAGNOSTIC_BYTES: z.coerce.number().int().min(4_096).max(131_072).default(20_480),
+  CLAMAV_HOST: z.string().min(1).default('clamav'),
+  CLAMAV_PORT: z.coerce.number().int().min(1).max(65_535).default(3_310),
+  CLAMAV_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(300_000).default(120_000),
+  CLAMAV_REQUIRED: booleanString('true'),
   RUNTIME_GIT_COMMIT: z.string().min(1).default('unknown'),
 
   GOOGLE_API_KEY: OptionalSecretSchema,
