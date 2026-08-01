@@ -1,10 +1,15 @@
 import { readFile } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { basename, isAbsolute, relative, resolve } from 'node:path';
 import {
   WorkspaceRegistrySchema,
   type WorkspaceRegistration,
   type WorkspaceRegistryDocument,
 } from './contracts.js';
+
+function pathInside(candidate: string, parent: string): boolean {
+  const relation = relative(parent, candidate);
+  return relation === '' || (!relation.startsWith('..') && !isAbsolute(relation));
+}
 
 export class WorkspaceRegistry {
   readonly #document: WorkspaceRegistryDocument;
@@ -19,7 +24,17 @@ export class WorkspaceRegistry {
       seen.add(workspace.workspaceId);
       const root = resolve(workspace.root);
       if (!isAbsolute(root)) throw new Error(`Workspace root must be absolute: ${workspace.workspaceId}`);
-      return { ...workspace, root };
+      const readRoots = workspace.readRoots.map((entry) => this.normalizeChild(root, entry, 'read root'));
+      const writeRoots = workspace.writeRoots.map((entry) => this.normalizeChild(root, entry, 'write root'));
+      const allowedScripts = workspace.allowedScripts.map((entry) => this.normalizeChild(root, entry, 'script'));
+      return {
+        ...workspace,
+        root,
+        readRoots,
+        writeRoots,
+        allowedScripts,
+        allowedExecutables: workspace.allowedExecutables.map((entry) => basename(entry).toLowerCase()),
+      };
     });
     if (!seen.has(document.defaultWorkspaceId)) {
       throw new Error(`Default workspace is not registered: ${document.defaultWorkspaceId}`);
@@ -46,11 +61,48 @@ export class WorkspaceRegistry {
 
   resolvePath(workspace: WorkspaceRegistration, candidate: string): string {
     const absolute = resolve(workspace.root, candidate);
-    const relation = relative(workspace.root, absolute);
-    if (relation.startsWith('..') || isAbsolute(relation)) {
+    if (!pathInside(absolute, workspace.root)) {
       throw new Error(`Path is outside the allowlisted workspace: ${candidate}`);
     }
     return absolute;
+  }
+
+  resolveReadPath(workspace: WorkspaceRegistration, candidate: string): string {
+    const absolute = this.resolvePath(workspace, candidate);
+    if (!workspace.readRoots.some((root) => pathInside(absolute, root))) {
+      throw new Error(`Read path is outside registered read roots: ${candidate}`);
+    }
+    return absolute;
+  }
+
+  resolveWritePath(workspace: WorkspaceRegistration, candidate: string): string {
+    const absolute = this.resolvePath(workspace, candidate);
+    if (!workspace.writeRoots.some((root) => pathInside(absolute, root))) {
+      throw new Error(`Write path is outside registered write roots: ${candidate}`);
+    }
+    return absolute;
+  }
+
+  assertExecutable(workspace: WorkspaceRegistration, executable: string): string {
+    const name = basename(executable).toLowerCase();
+    if (!workspace.allowedExecutables.includes(name)) {
+      throw new Error(`Executable is not allowlisted: ${name}`);
+    }
+    return name;
+  }
+
+  assertScript(workspace: WorkspaceRegistration, candidate: string): string {
+    const absolute = this.resolveReadPath(workspace, candidate);
+    if (!workspace.allowedScripts.includes(absolute)) {
+      throw new Error(`Script is not allowlisted: ${candidate}`);
+    }
+    return absolute;
+  }
+
+  assertScheduledTask(workspace: WorkspaceRegistration, taskName: string): void {
+    if (!taskName.startsWith(workspace.scheduledTaskPrefix)) {
+      throw new Error(`Scheduled Task must use prefix ${workspace.scheduledTaskPrefix}`);
+    }
   }
 
   list(): ReadonlyArray<Readonly<{
@@ -68,4 +120,14 @@ export class WorkspaceRegistry {
       hermesWrite: workspace.allowHermesWrite,
     }));
   }
+
+  private normalizeChild(root: string, candidate: string, kind: string): string {
+    const absolute = resolve(root, candidate);
+    if (!pathInside(absolute, root)) {
+      throw new Error(`Registered ${kind} is outside workspace root: ${candidate}`);
+    }
+    return absolute;
+  }
 }
+
+export { pathInside };
