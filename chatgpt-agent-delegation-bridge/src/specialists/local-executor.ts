@@ -184,20 +184,23 @@ export class LocalExecutor {
       }
       case 'filesystem.write': {
         const input = FileWriteSchema.parse(rawInput);
-        const path = this.registry.resolveWritePath(workspace, input.path);
+        let path = this.registry.resolveWritePath(workspace, input.path);
         this.assertDeclaredScope(path, request.writePaths, workspace, 'write');
         const data = Buffer.from(input.content, input.encoding === 'base64' ? 'base64' : 'utf8');
         if (data.length > this.config.maxOutputBytes) throw new Error(`Write payload exceeds bridge limit: ${input.path}`);
         if (input.createDirectories) await mkdir(dirname(path), { recursive: true });
+        path = this.registry.resolveWritePath(workspace, input.path);
+        this.assertDeclaredScope(path, request.writePaths, workspace, 'write');
         await writeFile(path, data, { flag: 'w' });
-        const readBack = await readFile(path);
+        const verifiedPath = this.registry.resolveWritePath(workspace, input.path);
+        const readBack = await readFile(verifiedPath);
         return {
           toolId,
-          ok: readBack.equals(data),
+          ok: verifiedPath === path && readBack.equals(data),
           path: input.path,
           bytesWritten: data.length,
           sha256: createHash('sha256').update(readBack).digest('hex'),
-          readBackVerified: readBack.equals(data),
+          readBackVerified: verifiedPath === path && readBack.equals(data),
         };
       }
       case 'powershell.execute': {
@@ -209,8 +212,8 @@ export class LocalExecutor {
           ? this.registry.resolveReadPath(workspace, input.cwd)
           : workspace.root;
         this.assertDeclaredScope(cwd, request.readPaths, workspace, 'read');
-        const executable = workspace.allowedExecutables.includes('pwsh.exe') ? 'pwsh.exe' : 'powershell.exe';
-        this.registry.assertExecutable(workspace, executable);
+        const executableName = workspace.allowedExecutables.includes('pwsh.exe') ? 'pwsh.exe' : 'powershell.exe';
+        const executable = this.registry.assertExecutable(workspace, executableName);
         const result = await runProcess({
           executable,
           args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...input.args],
@@ -251,8 +254,8 @@ export class LocalExecutor {
       : workspace.root;
 
     if (input.kind === 'git') {
-      const executable = process.platform === 'win32' ? 'git.exe' : 'git';
-      this.registry.assertExecutable(workspace, executable);
+      const executableName = process.platform === 'win32' ? 'git.exe' : 'git';
+      const executable = this.registry.assertExecutable(workspace, executableName);
       const [head, status] = await Promise.all([
         runProcess({ executable, args: ['rev-parse', 'HEAD'], cwd, timeoutMs: 30_000, maxOutputBytes: this.config.maxOutputBytes }),
         runProcess({ executable, args: ['status', '--porcelain=v1'], cwd, timeoutMs: 30_000, maxOutputBytes: this.config.maxOutputBytes }),
@@ -260,8 +263,8 @@ export class LocalExecutor {
       return { toolId: 'runtime.inspect', ok: head.exitCode === 0 && status.exitCode === 0, kind: 'git', head, status };
     }
     if (input.kind === 'docker') {
-      const executable = process.platform === 'win32' ? 'docker.exe' : 'docker';
-      this.registry.assertExecutable(workspace, executable);
+      const executableName = process.platform === 'win32' ? 'docker.exe' : 'docker';
+      const executable = this.registry.assertExecutable(workspace, executableName);
       const [version, compose] = await Promise.all([
         runProcess({ executable, args: ['version', '--format', '{{json .}}'], cwd, timeoutMs: 30_000, maxOutputBytes: this.config.maxOutputBytes }),
         runProcess({ executable, args: ['compose', 'version'], cwd, timeoutMs: 30_000, maxOutputBytes: this.config.maxOutputBytes }),
@@ -269,8 +272,8 @@ export class LocalExecutor {
       return { toolId: 'runtime.inspect', ok: version.exitCode === 0 && compose.exitCode === 0, kind: 'docker', version, compose };
     }
     if (process.platform !== 'win32') throw new Error(`${input.kind} inspection requires Windows.`);
-    const executable = workspace.allowedExecutables.includes('pwsh.exe') ? 'pwsh.exe' : 'powershell.exe';
-    this.registry.assertExecutable(workspace, executable);
+    const executableName = workspace.allowedExecutables.includes('pwsh.exe') ? 'pwsh.exe' : 'powershell.exe';
+    const executable = this.registry.assertExecutable(workspace, executableName);
     const names = input.names.map(quotePowerShell).join(',');
     const command = input.kind === 'process'
       ? `$n=@(${names}); Get-Process -ErrorAction SilentlyContinue | Where-Object { $n.Count -eq 0 -or $n -contains $_.ProcessName } | Select-Object ProcessName,Id,Path,StartTime | ConvertTo-Json -Depth 4`
@@ -293,7 +296,7 @@ export class LocalExecutor {
   ): Promise<Record<string, unknown>> {
     if (process.platform !== 'win32') throw new Error('Scheduled Task management requires Windows.');
     this.registry.assertScheduledTask(workspace, input.taskName);
-    this.registry.assertExecutable(workspace, 'schtasks.exe');
+    const schtasks = this.registry.assertExecutable(workspace, 'schtasks.exe');
     const args = ['/TN', input.taskName];
     if (input.operation === 'query') args.unshift('/Query');
     if (input.operation === 'run') args.unshift('/Run');
@@ -301,8 +304,8 @@ export class LocalExecutor {
     if (input.operation === 'delete') args.unshift('/Delete', '/F');
     if (input.operation === 'create') {
       if (!input.executable || !input.schedule) throw new Error('Create requires executable and schedule.');
-      this.registry.assertExecutable(workspace, input.executable);
-      const command = [input.executable, ...input.args]
+      const targetExecutable = this.registry.assertExecutable(workspace, input.executable);
+      const command = [targetExecutable, ...input.args]
         .map((part) => `"${part.replaceAll('"', '\\"')}"`)
         .join(' ');
       args.unshift('/Create', '/F', '/TR', command, '/SC', input.schedule);
@@ -310,7 +313,7 @@ export class LocalExecutor {
       if (input.startTime) args.push('/ST', input.startTime);
     }
     const result = await runProcess({
-      executable: 'schtasks.exe',
+      executable: schtasks,
       args,
       cwd: workspace.root,
       timeoutMs: this.config.defaultTimeoutSeconds * 1_000,
