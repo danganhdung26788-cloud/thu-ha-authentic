@@ -32,7 +32,7 @@ export class DelegationService {
     readonly config: BridgeConfig,
     readonly workspaces: WorkspaceRegistry,
   ) {
-    this.#codex = new CodexSpecialist(config);
+    this.#codex = new CodexSpecialist(config, workspaces);
     this.#localExecutor = new LocalExecutor(config, workspaces);
     this.#specialist = new AgentsSdkSpecialist(config);
   }
