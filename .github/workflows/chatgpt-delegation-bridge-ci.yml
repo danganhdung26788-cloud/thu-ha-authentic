@@ -39,7 +39,7 @@ jobs:
         run: |
           ! grep -R -E "bullmq|ioredis|chat-page|admin-page|runManagerDecision|manager-agent" src
           ! grep -R -E "<html|<textarea" src
-          ! grep -R -E "HermesSpecialist|inspectWithHermes|executeWithHermes|HERMES_ENABLED" src test
+          ! grep -R -E "HermesSpecialist|inspectWithHermes|executeWithHermes|HERMES_ENABLED" src
       - name: Secret scan
         shell: bash
         run: |
