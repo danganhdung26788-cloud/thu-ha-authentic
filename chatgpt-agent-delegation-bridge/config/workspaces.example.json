@@ -1,0 +1,13 @@
+{
+  "defaultWorkspaceId": "thu-ha-authentic",
+  "workspaces": [
+    {
+      "workspaceId": "thu-ha-authentic",
+      "root": "D:\\HermesAgent\\workspace\\thu-ha-authentic",
+      "allowCodexRead": true,
+      "allowCodexWrite": false,
+      "allowHermesRead": true,
+      "allowHermesWrite": false
+    }
+  ]
+}
