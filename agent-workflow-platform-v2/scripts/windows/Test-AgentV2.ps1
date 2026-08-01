@@ -1,12 +1,22 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $false)]
-  [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+  [string]$ProjectRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$ProjectRoot = (Resolve-Path $ProjectRoot).Path
+
+$ScriptDirectory = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+  $PSScriptRoot
+} else {
+  Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
+  $ProjectRoot = (Resolve-Path (Join-Path $ScriptDirectory '..\..')).Path
+} else {
+  $ProjectRoot = (Resolve-Path $ProjectRoot).Path
+}
 Set-Location $ProjectRoot
 
 function Read-EnvFile([string]$Path) {
@@ -22,7 +32,7 @@ function Read-EnvFile([string]$Path) {
   return $values
 }
 
-$compose = & docker compose --env-file .env -f compose.yml ps --format json
+$compose = & docker.exe compose --env-file .env -f compose.yml ps --format json
 if ($LASTEXITCODE -ne 0) { throw 'Docker Compose status check failed.' }
 
 $health = Invoke-RestMethod -Uri 'http://127.0.0.1:3100/health' -TimeoutSec 15
