@@ -19,7 +19,32 @@ if ([string]::IsNullOrWhiteSpace($BridgeRoot)) {
 }
 Set-Location $BridgeRoot
 
-$health = Invoke-RestMethod -Uri 'http://127.0.0.1:3210/health' -TimeoutSec 10
+function Read-EnvValue([string]$Path, [string]$Name, [string]$DefaultValue) {
+  foreach ($line in Get-Content -LiteralPath $Path) {
+    $trimmed = $line.Trim()
+    if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
+    $separator = $trimmed.IndexOf('=')
+    if ($separator -le 0) { continue }
+    if ($trimmed.Substring(0, $separator) -eq $Name) {
+      return $trimmed.Substring($separator + 1)
+    }
+  }
+  return $DefaultValue
+}
+
+$bind = Read-EnvValue '.env' 'MCP_BIND' '127.0.0.1'
+$port = [int](Read-EnvValue '.env' 'MCP_PORT' '3210')
+$authMode = Read-EnvValue '.env' 'MCP_AUTH_MODE' 'none'
+$authToken = Read-EnvValue '.env' 'MCP_AUTH_TOKEN' ''
+$healthHost = if ($bind -eq '0.0.0.0' -or $bind -eq 'localhost') { '127.0.0.1' } else { $bind }
+$healthUri = "http://${healthHost}:$port/health"
+$headers = @{}
+if ($authMode -eq 'bearer') {
+  if ([string]::IsNullOrWhiteSpace($authToken)) { throw 'MCP_AUTH_TOKEN is missing.' }
+  $headers['Authorization'] = "Bearer $authToken"
+}
+
+$health = Invoke-RestMethod -Uri $healthUri -Headers $headers -TimeoutSec 10
 if ($health.ok -ne $true) { throw 'Bridge HTTP health failed.' }
 
 & node.exe --env-file=.env .\scripts\smoke-mcp.mjs
