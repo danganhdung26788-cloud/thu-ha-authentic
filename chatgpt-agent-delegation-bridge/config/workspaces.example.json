@@ -4,6 +4,19 @@
     {
       "workspaceId": "thu-ha-authentic",
       "root": "D:\\HermesAgent\\workspace\\thu-ha-authentic",
+      "readRoots": [
+        "."
+      ],
+      "writeRoots": [],
+      "allowedExecutables": [
+        "git.exe",
+        "docker.exe",
+        "powershell.exe",
+        "pwsh.exe",
+        "schtasks.exe"
+      ],
+      "allowedScripts": [],
+      "scheduledTaskPrefix": "SYSTEM-AI-",
       "allowCodexRead": true,
       "allowCodexWrite": false,
       "allowHermesRead": true,
