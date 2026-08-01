@@ -1,7 +1,7 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
   [Parameter(Mandatory = $false)]
-  [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
+  [string]$ProjectRoot = '',
 
   [Parameter(Mandatory = $false)]
   [string]$TaskPrefix = 'Hermes-V2-'
@@ -9,7 +9,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$ProjectRoot = (Resolve-Path $ProjectRoot).Path
+
+$ScriptDirectory = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+  $PSScriptRoot
+} else {
+  Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
+  $ProjectRoot = (Resolve-Path (Join-Path $ScriptDirectory '..\..')).Path
+} else {
+  $ProjectRoot = (Resolve-Path $ProjectRoot).Path
+}
+
 $runner = Join-Path $ProjectRoot 'scripts\windows\Run-HostAdapter.ps1'
 if (-not (Test-Path $runner)) { throw "Missing runner: $runner" }
 
