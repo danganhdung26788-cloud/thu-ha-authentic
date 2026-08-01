@@ -8,6 +8,7 @@ param(
 
   [switch]$InfrastructureOnly,
   [switch]$SkipCodexLoginCheck,
+  [switch]$SkipRoutingBenchmark,
   [switch]$ConfigureFirewall,
   [switch]$EnterShadow
 )
@@ -136,14 +137,20 @@ if ($LASTEXITCODE -ne 0) { throw 'Docker Compose deployment failed.' }
 Start-Sleep -Seconds 8
 & (Join-Path $ScriptDirectory 'Test-AgentV2.ps1') -ProjectRoot $ProjectRoot
 
+if (-not $InfrastructureOnly -and -not $SkipRoutingBenchmark) {
+  & (Join-Path $ScriptDirectory 'Test-LocalManagerRouting.ps1') -ProjectRoot $ProjectRoot
+}
+
 if ($EnterShadow) {
   & (Join-Path $ScriptDirectory 'Start-AgentV2Shadow.ps1') -ProjectRoot $ProjectRoot
 }
 
 if ($InfrastructureOnly) {
-  Write-Host 'Workflow AI V2 compatibility deployment PASS. Local model is installed, but Shadow remains blocked.'
+  Write-Host 'Workflow AI V2 compatibility deployment PASS. Local model is installed, but routing UAT and Shadow remain blocked.'
+} elseif ($SkipRoutingBenchmark) {
+  Write-Host 'Workflow AI V2 runtime started, but routing benchmark was explicitly skipped. Normal UAT and Shadow remain blocked.'
 } else {
-  Write-Host 'Workflow AI V2 chat-first isolated runtime deployment PASS.'
+  Write-Host 'Workflow AI V2 chat-first isolated runtime and local Manager benchmark PASS.'
 }
 Write-Host 'Normal use: open the Workflow AI shortcut and type one chat message.'
 Write-Host 'V1 remains unchanged. Cutover state remains V1_ONLY unless -EnterShadow was explicitly supplied.'
