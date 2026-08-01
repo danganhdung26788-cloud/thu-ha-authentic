@@ -131,6 +131,19 @@ jobs:
           }
           if ($errors.Count -gt 0) { throw ($errors -join "`n") }
 
+      - name: Bootstrap configuration with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $workspace = Join-Path $env:RUNNER_TEMP 'agent-v2-ps51-workspace'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File '.\scripts\windows\New-AgentV2Configuration.ps1' -ProjectRoot $PWD.Path -WorkspaceRoot $workspace
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 configuration bootstrap failed.' }
+          foreach ($path in @('.env', 'runtime\workspaces.json', 'runtime\host-adapter.hermes.env', 'runtime\host-adapter.codex.env')) {
+            if (-not (Test-Path $path)) { throw "Bootstrap output missing: $path" }
+          }
+          if ((Get-Content .env | Where-Object { $_ -match '^GOOGLE_API_KEY=.+$' }).Count -gt 0) {
+            throw 'Gemini API key must remain empty in generated configuration.'
+          }
+
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:

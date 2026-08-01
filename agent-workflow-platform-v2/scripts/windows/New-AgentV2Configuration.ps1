@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $false)]
-  [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
+  [string]$ProjectRoot = '',
 
   [Parameter(Mandatory = $false)]
   [string]$WorkspaceRoot = ''
@@ -10,9 +10,25 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$ScriptDirectory = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+  $PSScriptRoot
+} else {
+  Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
+  $ProjectRoot = (Resolve-Path (Join-Path $ScriptDirectory '..\..')).Path
+} else {
+  $ProjectRoot = (Resolve-Path $ProjectRoot).Path
+}
+
 function New-RandomSecret([int]$Bytes = 48) {
   $buffer = New-Object byte[] $Bytes
-  [System.Security.Cryptography.RandomNumberGenerator]::Fill($buffer)
+  $generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $generator.GetBytes($buffer)
+  } finally {
+    if ($null -ne $generator) { $generator.Dispose() }
+  }
   return [Convert]::ToBase64String($buffer).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 }
 
@@ -24,7 +40,11 @@ function Set-EnvValue([string]$Content, [string]$Name, [string]$Value) {
   return $Content.TrimEnd() + "`r`n$Name=$Value`r`n"
 }
 
-$ProjectRoot = (Resolve-Path $ProjectRoot).Path
+function Write-Utf8NoBom([string]$Path, [string]$Content) {
+  $encoding = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($Path, $Content, $encoding)
+}
+
 if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { $WorkspaceRoot = $ProjectRoot }
 $WorkspaceRoot = [System.IO.Path]::GetFullPath($WorkspaceRoot)
 $envTemplate = Join-Path $ProjectRoot '.env.example'
@@ -56,7 +76,7 @@ $content = Set-EnvValue $content 'GOOGLE_API_KEY' ''
 $content = Set-EnvValue $content 'GEMINI_MODEL' ''
 $content = Set-EnvValue $content 'CANVA_ADAPTER_URL' ''
 $content = Set-EnvValue $content 'CANVA_ACCESS_TOKEN' ''
-$content | Set-Content -Path $envFile -Encoding utf8NoBOM
+Write-Utf8NoBom -Path $envFile -Content $content
 
 $workspaceTemplate = Join-Path $runtimeDir 'workspaces.example.json'
 $workspaceFile = Join-Path $runtimeDir 'workspaces.json'
@@ -65,7 +85,7 @@ if (-not (Test-Path $workspaceFile)) {
   $workspaceJson.workspaces[0].root = $WorkspaceRoot.Replace('\', '/')
   $workspaceJson.workspaces[0].readRoots = @($WorkspaceRoot.Replace('\', '/'))
   $workspaceJson.workspaces[0].writeRoots = @($WorkspaceRoot.Replace('\', '/'))
-  $workspaceJson | ConvertTo-Json -Depth 10 | Set-Content -Path $workspaceFile -Encoding utf8NoBOM
+  Write-Utf8NoBom -Path $workspaceFile -Content ($workspaceJson | ConvertTo-Json -Depth 10)
 }
 
 foreach ($role in @('hermes', 'codex')) {
@@ -76,7 +96,7 @@ foreach ($role in @('hermes', 'codex')) {
     $hostContent = Set-EnvValue $hostContent 'HOST_ADAPTER_TOKEN' $adapterToken
     $hostContent = Set-EnvValue $hostContent 'HOST_ADAPTER_REGISTRY_PATH' ($workspaceFile.Replace('\', '/'))
     $hostContent = Set-EnvValue $hostContent 'HOST_ADAPTER_RECEIPT_ROOT' ((Join-Path $runtimeDir 'receipts').Replace('\', '/'))
-    $hostContent | Set-Content -Path $target -Encoding utf8NoBOM
+    Write-Utf8NoBom -Path $target -Content $hostContent
   }
 }
 
