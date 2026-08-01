@@ -138,11 +138,16 @@ export class ChatService {
 
   async bootstrap(identity: ChatIdentity): Promise<Record<string, unknown>> {
     const env = getEnv();
-    const model = await modelProviderHealthCheck();
+    const [model, readiness] = await Promise.all([
+      modelProviderHealthCheck(),
+      this.platform.readiness(),
+    ]);
     return {
       identity,
       localOnly: true,
       cutoverPhase: 'V1_ONLY',
+      ready: readiness.ready === true,
+      components: readiness,
       provider: {
         kind: model.provider,
         managerModel: model.managerModel,
