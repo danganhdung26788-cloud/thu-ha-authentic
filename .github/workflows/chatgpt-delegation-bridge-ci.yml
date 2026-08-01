@@ -28,8 +28,8 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: chatgpt-agent-delegation-bridge/package.json
-      - run: npm install --ignore-scripts
+          cache-dependency-path: chatgpt-agent-delegation-bridge/package-lock.json
+      - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm test
       - run: npm run build
@@ -39,6 +39,7 @@ jobs:
         run: |
           ! grep -R -E "bullmq|ioredis|chat-page|admin-page|runManagerDecision|manager-agent" src
           ! grep -R -E "<html|<textarea" src
+          ! grep -R -E "HermesSpecialist|inspectWithHermes|executeWithHermes|HERMES_ENABLED" src test
       - name: Secret scan
         shell: bash
         run: |
@@ -56,8 +57,8 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: chatgpt-agent-delegation-bridge/package.json
-      - run: npm install --ignore-scripts
+          cache-dependency-path: chatgpt-agent-delegation-bridge/package-lock.json
+      - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm test
       - run: npm run build
