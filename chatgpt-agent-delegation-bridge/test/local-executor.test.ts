@@ -28,7 +28,6 @@ async function fixture() {
       allowedScripts: [],
       scheduledTaskPrefix: 'TEST-',
       allowCodexRead: false,
-      allowCodexWrite: false,
       allowLocalRead: true,
       allowLocalWrite: true,
     }],
