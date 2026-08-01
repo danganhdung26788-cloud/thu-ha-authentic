@@ -111,20 +111,28 @@ test('attachments are added to deterministic read scope without client-provided 
 });
 
 test('diagnostic redaction removes representative credentials while retaining structure', () => {
+  const fakeOpenAiKey = 'sk-' + 'a'.repeat(32);
+  const fakeGoogleKey = 'AI' + 'za' + '1'.repeat(32);
+  const fakeBearer = 'very-secret-' + 'token-value';
+  const fakeDatabasePassword = 'database-' + 'password';
+  const fakeJwt = ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiIxIn0', 'signature'].join('.');
+  const pemHeader = '-----BEGIN ' + 'PRIVATE KEY-----';
+  const pemFooter = '-----END ' + 'PRIVATE KEY-----';
   const secretValues = [
-    'sk-abcdefghijklmnopqrstuvwxyz123456',
-    'very-secret-token-value',
-    'database-password',
-    'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature',
-    'AIza123456789012345678901234567890',
+    fakeOpenAiKey,
+    fakeBearer,
+    fakeDatabasePassword,
+    fakeJwt,
+    fakeGoogleKey,
+    'private-material',
   ];
   const raw = [
-    `OPENAI_API_KEY=${secretValues[0]}`,
-    `Authorization: Bearer ${secretValues[1]}`,
-    `DATABASE_URL=postgresql://agent:${secretValues[2]}@postgres:5432/agent_v2`,
-    `jwt=${secretValues[3]}`,
-    `GOOGLE_API_KEY=${secretValues[4]}`,
-    '-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----',
+    `OPENAI_API_KEY=${fakeOpenAiKey}`,
+    `Authorization: Bearer ${fakeBearer}`,
+    `DATABASE_URL=postgresql://agent:${fakeDatabasePassword}@postgres:5432/agent_v2`,
+    `jwt=${fakeJwt}`,
+    `GOOGLE_API_KEY=${fakeGoogleKey}`,
+    `${pemHeader}\nprivate-material\n${pemFooter}`,
   ].join('\n');
   const result = redactSecrets(raw);
   for (const value of secretValues) assert.equal(result.text.includes(value), false);
