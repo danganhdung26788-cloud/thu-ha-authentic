@@ -88,3 +88,25 @@ jobs:
             $allErrors | ForEach-Object { Write-Error $_ }
             throw 'PowerShell compatibility gate failed.'
           }
+      - name: Run CWC-P3 Windows read-only UAT entrypoint
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\scripts\windows\Invoke-BridgeReadOnlyUat.ps1
+      - name: Verify CWC-P3 machine-readable receipt
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $receiptPath = '.\runtime\cwc-p3-read-only-uat-latest.json'
+          if (-not (Test-Path -LiteralPath $receiptPath)) {
+            throw 'CWC-P3 receipt is missing.'
+          }
+          $receipt = Get-Content -Raw -LiteralPath $receiptPath | ConvertFrom-Json
+          if ($receipt.status -ne 'PASS') { throw 'CWC-P3 receipt did not report PASS.' }
+          if ($receipt.chatgptPrimaryBrain -ne $true) { throw 'ChatGPT-primary invariant failed.' }
+          if ($receipt.backendManagerAgent -ne $false) { throw 'Backend Manager invariant failed.' }
+          if ($receipt.separateChatUi -ne $false) { throw 'Separate chat UI invariant failed.' }
+          if ($receipt.localWrite -ne $false) { throw 'Local write must remain disabled.' }
+          if ($receipt.connectedToChatgpt -ne $false) { throw 'CI must not claim ChatGPT connectivity.' }
+          if ($receipt.bridgeLeftRunning -ne $false) { throw 'CI must stop the bridge after UAT.' }
+          Write-Host 'CWC_P3_WINDOWS_CI_UAT=PASS'
