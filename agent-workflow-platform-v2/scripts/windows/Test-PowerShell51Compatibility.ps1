@@ -44,6 +44,12 @@ if ($registration -match "-Execute\s+'powershell\.exe'" -or $registration -match
 if ($registration -notmatch 'Get-Command\s+node\.exe' -or $registration -notmatch '--env-file=' -or $registration -notmatch '-Execute\s+\$nodePath') {
   $violations += "${registrationPath}: direct node.exe Scheduled Task contract is missing"
 }
+if ($registration -notmatch 'Stop-StaleAdapterListener' -or $registration -notmatch 'Get-NetTCPConnection' -or $registration -notmatch 'ExpectedEntrypoint') {
+  $violations += "${registrationPath}: stale adapter process cleanup contract is missing"
+}
+if ($registration -notmatch 'Wait-AdapterHealth' -or $registration -notmatch 'Invoke-RestMethod' -or $registration -notmatch 'health-verified') {
+  $violations += "${registrationPath}: post-start adapter health verification contract is missing"
+}
 
 if ($violations.Count -gt 0) {
   throw "Windows PowerShell 5.1 compatibility violations:`n$($violations -join "`n")"
@@ -51,3 +57,4 @@ if ($violations.Count -gt 0) {
 
 Write-Host 'Windows PowerShell 5.1 compatibility scan PASS.'
 Write-Host 'Direct node.exe host adapter lifecycle contract PASS.'
+Write-Host 'Stale adapter cleanup and post-start health verification contract PASS.'
