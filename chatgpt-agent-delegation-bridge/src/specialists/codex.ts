@@ -4,8 +4,10 @@ import type { BridgeConfig } from '../config.js';
 import type { CodexDelegationInput, DelegationResult, WorkspaceRegistration } from '../contracts.js';
 import { runProcess } from '../host/process-runner.js';
 import { redactSecrets } from '../redaction.js';
+import { WorkspaceRegistry } from '../workspace-registry.js';
 
 async function git(
+  executable: string,
   workspaceRoot: string,
   args: string[],
   maxBytes: number,
@@ -15,7 +17,7 @@ async function git(
   stderr: string;
 }>> {
   const result = await runProcess({
-    executable: process.platform === 'win32' ? 'git.exe' : 'git',
+    executable,
     args,
     cwd: workspaceRoot,
     timeoutMs: 30_000,
@@ -28,11 +30,15 @@ async function git(
   };
 }
 
-async function snapshot(root: string, maxBytes: number): Promise<Record<string, unknown>> {
+async function snapshot(
+  root: string,
+  gitExecutable: string,
+  maxBytes: number,
+): Promise<Record<string, unknown>> {
   const [head, status, diffStat] = await Promise.all([
-    git(root, ['rev-parse', 'HEAD'], maxBytes),
-    git(root, ['status', '--porcelain=v1'], maxBytes),
-    git(root, ['diff', '--stat'], maxBytes),
+    git(gitExecutable, root, ['rev-parse', 'HEAD'], maxBytes),
+    git(gitExecutable, root, ['status', '--porcelain=v1'], maxBytes),
+    git(gitExecutable, root, ['diff', '--stat'], maxBytes),
   ]);
   if (head.exitCode !== 0) throw new Error('Codex workspace must be a valid Git repository.');
   return { head: head.stdout, status: status.stdout, diffStat: diffStat.stdout };
@@ -57,7 +63,10 @@ function formatInstruction(format: CodexDelegationInput['responseFormat']): stri
 }
 
 export class CodexSpecialist {
-  constructor(readonly config: BridgeConfig) {}
+  constructor(
+    readonly config: BridgeConfig,
+    readonly registry: WorkspaceRegistry,
+  ) {}
 
   async run(
     workspace: WorkspaceRegistration,
@@ -71,45 +80,51 @@ export class CodexSpecialist {
       return this.blocked(requestId, 'CODEX_READ_NOT_ALLOWED', 'Codex read access is not allowed for this workspace.');
     }
 
-    const before = await snapshot(workspace.root, this.config.maxOutputBytes);
-    const codex = new Codex({});
-    const thread = codex.startThread({
-      workingDirectory: workspace.root,
-      sandboxMode: 'read-only',
-      approvalPolicy: 'never',
-      skipGitRepoCheck: false,
-      networkAccessEnabled: this.config.codex.networkAccess,
-      webSearchMode: 'disabled',
-      modelReasoningEffort: this.config.codex.reasoningEffort,
-      ...(this.config.codex.model ? { model: this.config.codex.model } : {}),
-    });
-    const timeoutSeconds = input.timeoutSeconds ?? this.config.defaultTimeoutSeconds;
-    const controller = new AbortController();
-    const timer = setTimeout(
-      () => controller.abort(new Error('Codex delegation timed out.')),
-      timeoutSeconds * 1_000,
-    );
-    timer.unref();
-
-    const language = input.outputLanguage ?? 'vi';
-    const prompt = [
-      'You are a read-only code specialist called explicitly by ChatGPT.',
-      'ChatGPT remains the primary brain, owns the conversation, and will evaluate your answer.',
-      'MODE=READ_ONLY_PROPOSAL',
-      `OUTPUT_LANGUAGE=${language === 'vi' ? 'Vietnamese' : 'English'}`,
-      `OBJECTIVE=${input.objective}`,
-      input.context ? `CONTEXT=${input.context}` : '',
-      input.paths.length ? `FOCUS_PATHS=${input.paths.join(', ')}` : '',
-      formatInstruction(input.responseFormat),
-      'Do not change any file, Git state, dependency, setting, or external system.',
-      'Do not run commands that mutate files or install dependencies.',
-      'Never change credentials, permissions, billing, repository visibility, operating-system configuration, or Git history.',
-      'Return a useful specialist result for ChatGPT to evaluate and present or execute separately after approval.',
-    ].filter(Boolean).join('\n');
+    const gitName = process.platform === 'win32' ? 'git.exe' : 'git';
+    let gitExecutable = '';
+    let before: Record<string, unknown> = { unavailable: true };
+    let timer: NodeJS.Timeout | undefined;
 
     try {
+      gitExecutable = this.registry.assertExecutable(workspace, gitName);
+      before = await snapshot(workspace.root, gitExecutable, this.config.maxOutputBytes);
+      const codex = new Codex({});
+      const thread = codex.startThread({
+        workingDirectory: workspace.root,
+        sandboxMode: 'read-only',
+        approvalPolicy: 'never',
+        skipGitRepoCheck: false,
+        networkAccessEnabled: this.config.codex.networkAccess,
+        webSearchMode: 'disabled',
+        modelReasoningEffort: this.config.codex.reasoningEffort,
+        ...(this.config.codex.model ? { model: this.config.codex.model } : {}),
+      });
+      const timeoutSeconds = input.timeoutSeconds ?? this.config.defaultTimeoutSeconds;
+      const controller = new AbortController();
+      timer = setTimeout(
+        () => controller.abort(new Error('Codex delegation timed out.')),
+        timeoutSeconds * 1_000,
+      );
+      timer.unref();
+
+      const language = input.outputLanguage ?? 'vi';
+      const prompt = [
+        'You are a read-only code specialist called explicitly by ChatGPT.',
+        'ChatGPT remains the primary brain, owns the conversation, and will evaluate your answer.',
+        'MODE=READ_ONLY_PROPOSAL',
+        `OUTPUT_LANGUAGE=${language === 'vi' ? 'Vietnamese' : 'English'}`,
+        `OBJECTIVE=${input.objective}`,
+        input.context ? `CONTEXT=${input.context}` : '',
+        input.paths.length ? `FOCUS_PATHS=${input.paths.join(', ')}` : '',
+        formatInstruction(input.responseFormat),
+        'Do not change any file, Git state, dependency, setting, or external system.',
+        'Do not run commands that mutate files or install dependencies.',
+        'Never change credentials, permissions, billing, repository visibility, operating-system configuration, or Git history.',
+        'Return a useful specialist result for ChatGPT to evaluate and present or execute separately after approval.',
+      ].filter(Boolean).join('\n');
+
       const turn = await thread.run(prompt, { signal: controller.signal });
-      const after = await snapshot(workspace.root, this.config.maxOutputBytes);
+      const after = await snapshot(workspace.root, gitExecutable, this.config.maxOutputBytes);
       const changed = JSON.stringify(before) !== JSON.stringify(after);
       const payload = {
         mode: 'READ_ONLY_PROPOSAL',
@@ -145,7 +160,9 @@ export class CodexSpecialist {
         retryable: false,
       };
     } catch (error) {
-      const after = await snapshot(workspace.root, this.config.maxOutputBytes).catch(() => ({ unavailable: true }));
+      const after = gitExecutable
+        ? await snapshot(workspace.root, gitExecutable, this.config.maxOutputBytes).catch(() => ({ unavailable: true }))
+        : { unavailable: true };
       const message = redactSecrets(error, this.config.maxOutputBytes);
       const payload = { mode: 'READ_ONLY_PROPOSAL', error: message, before, after };
       return {
@@ -160,7 +177,7 @@ export class CodexSpecialist {
         errorCode: 'CODEX_DELEGATION_FAILED',
       };
     } finally {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
     }
   }
 
