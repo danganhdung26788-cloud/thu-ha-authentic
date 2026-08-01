@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "1.0.0",
+  "phase": "CWC-P6",
+  "status": "PASS",
+  "testedAt": "2026-08-01T13:00:00.000Z",
+  "workspacePlan": "BUSINESS",
+  "repositoryCommit": "1111111111111111111111111111111111111111",
+  "p5EvidenceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "writeProfileSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "p5PassVerified": true,
+  "sandboxOnly": true,
+  "teardownComplete": true,
+  "localWriteActivated": false,
+  "connectedWriteApp": false,
+  "production": false,
+  "blockReason": "",
+  "scenarios": {
+    "fileWriteReadBack": "PASS",
+    "wrongHashBlocked": "PASS",
+    "singleUseBlocked": "PASS",
+    "idempotentRetry": "PASS",
+    "expirationBlocked": "PASS",
+    "pathEscapeBlocked": "PASS",
+    "powerShellScript": "NOT_RUN",
+    "scheduledTask": "NOT_RUN"
+  }
+}
