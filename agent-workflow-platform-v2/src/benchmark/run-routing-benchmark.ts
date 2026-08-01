@@ -93,24 +93,40 @@ async function runScenario(index: number): Promise<ScenarioResult> {
   }
 }
 
+function conciseError(value: string | null): string {
+  if (!value) return '';
+  return value.replace(/\s+/gu, ' ').slice(0, 240);
+}
+
 async function main(): Promise<void> {
   const results: ScenarioResult[] = [];
+  let systemicFailure: string | null = null;
   for (let index = 0; index < ROUTING_SCENARIOS.length; index += 1) {
     const result = await runScenario(index);
     results.push(result);
     process.stdout.write(
       `[${String(index + 1).padStart(3, '0')}/100] ${result.id} `
       + `schema=${result.schemaValid} route=${result.routeCorrect} `
-      + `approval=${result.approvalCorrect} clarification=${result.clarificationCorrect}\n`,
+      + `approval=${result.approvalCorrect} clarification=${result.clarificationCorrect}`
+      + `${result.error ? ` error=${conciseError(result.error)}` : ''}\n`,
     );
+    if (results.length === 3 && results.every((item) => !item.schemaValid)) {
+      const errors = new Set(results.map((item) => item.error));
+      if (errors.size === 1) {
+        systemicFailure = results[0]?.error ?? 'Unknown systemic Manager failure.';
+        process.stdout.write(`Systemic failure detected after three identical errors: ${conciseError(systemicFailure)}\n`);
+        break;
+      }
+    }
   }
 
   const schemaValid = results.filter((item) => item.schemaValid).length;
   const routeCorrect = results.filter((item) => item.routeCorrect).length;
-  const approvalIndexes = ROUTING_SCENARIOS
+  const executedScenarios = ROUTING_SCENARIOS.slice(0, results.length);
+  const approvalIndexes = executedScenarios
     .map((item, index) => item.expectApproval ? index : -1)
     .filter((index) => index >= 0);
-  const clarificationIndexes = ROUTING_SCENARIOS
+  const clarificationIndexes = executedScenarios
     .map((item, index) => item.expectClarification ? index : -1)
     .filter((index) => index >= 0);
   const approvalCorrect = approvalIndexes.filter((index) => results[index]?.approvalCorrect).length;
@@ -119,10 +135,11 @@ async function main(): Promise<void> {
   const toolsValid = results.filter((item) => item.toolsValid).length;
   const summary = {
     total: results.length,
+    expectedTotal: ROUTING_SCENARIOS.length,
     schemaValid,
-    schemaRate: schemaValid / results.length,
+    schemaRate: results.length ? schemaValid / results.length : 0,
     routeCorrect,
-    routeAccuracy: routeCorrect / results.length,
+    routeAccuracy: results.length ? routeCorrect / results.length : 0,
     approvalCases: approvalIndexes.length,
     approvalCorrect,
     approvalRecall: approvalIndexes.length ? approvalCorrect / approvalIndexes.length : 1,
@@ -132,10 +149,12 @@ async function main(): Promise<void> {
       ? clarificationCorrect / clarificationIndexes.length
       : 1,
     toolsValid,
-    toolsValidRate: toolsValid / results.length,
+    toolsValidRate: results.length ? toolsValid / results.length : 0,
+    systemicFailure,
   };
 
-  const outputDirectory = path.resolve(process.cwd(), 'runtime', 'benchmark');
+  const configuredOutput = process.env.BENCHMARK_OUTPUT_ROOT?.trim();
+  const outputDirectory = configuredOutput || path.resolve(process.cwd(), 'runtime', 'benchmark');
   await mkdir(outputDirectory, { recursive: true });
   const outputPath = path.join(
     outputDirectory,
@@ -145,7 +164,8 @@ async function main(): Promise<void> {
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   process.stdout.write(`Benchmark report: ${outputPath}\n`);
 
-  const accepted = summary.schemaRate === 1
+  const accepted = summary.total === ROUTING_SCENARIOS.length
+    && summary.schemaRate === 1
     && summary.routeAccuracy >= 0.95
     && summary.approvalRecall === 1
     && summary.clarificationRecall === 1

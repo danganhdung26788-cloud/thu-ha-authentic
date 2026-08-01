@@ -6,6 +6,9 @@ import test from 'node:test';
 const WINDOWS_PS51_ENTRYPOINTS = [
   'scripts/windows/Install-WorkflowV2ChatApp.ps1',
   'scripts/windows/Start-WorkflowV2ChatApp.ps1',
+  'scripts/windows/Test-AgentV2.ps1',
+  'scripts/windows/Test-LocalManagerRouting.ps1',
+  'scripts/windows/Register-AgentV2ScheduledTasks.ps1',
 ] as const;
 
 for (const relativePath of WINDOWS_PS51_ENTRYPOINTS) {

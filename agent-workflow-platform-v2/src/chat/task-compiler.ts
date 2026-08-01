@@ -17,38 +17,59 @@ export type CompiledChatTask = Readonly<{
   payload: Record<string, unknown>;
 }>;
 
-const WRITE_PATTERNS = [
-  /\b(sửa|chỉnh sửa|cập nhật|tạo|viết|thêm|xóa|xoá|đổi|triển khai|cài|khởi động lại|sao lưu|phục hồi)\b/iu,
-  /\b(fix|modify|update|create|write|add|delete|remove|deploy|install|restart|backup|restore)\b/iu,
+const WRITE_TERMS = [
+  'sửa', 'chỉnh sửa', 'cập nhật', 'tạo', 'viết', 'thêm', 'xóa', 'xoá',
+  'đổi', 'triển khai', 'cài', 'khởi động lại', 'sao lưu', 'phục hồi',
+  'fix', 'modify', 'update', 'create', 'write', 'add', 'delete', 'remove',
+  'deploy', 'install', 'restart', 'backup', 'restore',
+];
+const DESTRUCTIVE_TERMS = [
+  'xóa sạch', 'xoá sạch', 'xóa toàn bộ', 'xoá toàn bộ', 'format',
+  'reset', 'drop database', 'drop table', 'purge', 'wipe',
+  'force-push', 'force push', 'rewrite history', 'viết lại lịch sử',
+];
+const PRODUCTION_TERMS = [
+  'production', ' prod ', 'sản xuất', 'hệ thống thật', 'môi trường thật', 'đang vận hành',
+];
+const CREDENTIAL_TERMS = [
+  'api key', 'mật khẩu', 'password', 'credential', 'secret', 'token',
+  'private key', 'khóa bí mật', 'khoá bí mật',
+];
+const PERMISSION_TERMS = [
+  'quyền truy cập', 'permission', ' role ', ' admin ', 'administrator',
+  'chủ sở hữu', ' owner ',
+];
+const EXTERNAL_PUBLISH_TERMS = [
+  'đăng công khai', 'công khai', 'công bố', 'chia sẻ ra ngoài',
+  'external share', 'gửi ra ngoài', 'lên mạng xã hội', 'kênh công cộng',
+  'toàn bộ internet', 'ra bên ngoài', 'ra ngoài tổ chức', 'public',
+];
+const PUBLISH_NEGATIONS = [
+  'chưa publish', 'chưa xuất bản', 'không publish', 'không xuất bản',
+  'không chia sẻ công khai', 'không đăng công khai', 'chưa chia sẻ',
+  'trạng thái nháp', 'bản nháp', 'xuất bản nháp',
+];
+const DEEP_OS_TERMS = [
+  'registry', 'group policy', 'chính sách nhóm', 'driver', 'bios', 'firmware',
+  'tường lửa', 'firewall', 'windows defender', 'wdac',
 ];
 
-const DESTRUCTIVE_PATTERNS = [
-  /\b(xóa sạch|xoá sạch|xóa toàn bộ|xoá toàn bộ|format|reset|drop database|drop table|purge|wipe)\b/iu,
-  /\b(force[- ]?push|rewrite history|viết lại lịch sử)\b/iu,
-];
+function normalize(value: string): string {
+  return ` ${value.normalize('NFKC').trim().toLowerCase()} `;
+}
 
-const PRODUCTION_PATTERNS = [
-  /\b(production|prod|sản xuất|hệ thống thật|môi trường thật|đang vận hành)\b/iu,
-];
+function containsAny(value: string, terms: readonly string[]): boolean {
+  return terms.some((term) => value.includes(term));
+}
 
-const CREDENTIAL_PATTERNS = [
-  /\b(api key|mật khẩu|password|credential|secret|token|private key|khóa bí mật|khoá bí mật)\b/iu,
-];
+function removePhrases(value: string, phrases: readonly string[]): string {
+  return phrases.reduce((current, phrase) => current.split(phrase).join(' '), value);
+}
 
-const PERMISSION_PATTERNS = [
-  /\b(quyền truy cập|permission|role|admin|administrator|chủ sở hữu|owner)\b/iu,
-];
-
-const EXTERNAL_PUBLISH_PATTERNS = [
-  /\b(đăng công khai|công bố|publish|public|chia sẻ ra ngoài|external share|gửi ra ngoài)\b/iu,
-];
-
-const DEEP_OS_PATTERNS = [
-  /\b(registry|group policy|chính sách nhóm|driver|bios|firmware|tường lửa|firewall|windows defender|wdac)\b/iu,
-];
-
-function anyMatch(value: string, patterns: RegExp[]): boolean {
-  return patterns.some((pattern) => pattern.test(value));
+function detectsExternalPublishing(value: string): boolean {
+  const publishRelevantText = removePhrases(value, PUBLISH_NEGATIONS);
+  return containsAny(publishRelevantText, EXTERNAL_PUBLISH_TERMS)
+    || containsAny(publishRelevantText, [' publish ', 'xuất bản']);
 }
 
 export function compileChatTask(
@@ -57,14 +78,15 @@ export function compileChatTask(
 ): CompiledChatTask {
   const normalized = objective.normalize('NFKC').trim();
   if (!normalized) throw new Error('Chat objective is empty.');
+  const value = normalize(normalized);
 
-  const destructive = anyMatch(normalized, DESTRUCTIVE_PATTERNS);
-  const touchesProduction = anyMatch(normalized, PRODUCTION_PATTERNS);
-  const changesCredentials = anyMatch(normalized, CREDENTIAL_PATTERNS);
-  const changesPermissions = anyMatch(normalized, PERMISSION_PATTERNS);
-  const externalPublishing = anyMatch(normalized, EXTERNAL_PUBLISH_PATTERNS);
-  const deepOperatingSystemChange = anyMatch(normalized, DEEP_OS_PATTERNS);
-  const mutating = anyMatch(normalized, WRITE_PATTERNS)
+  const destructive = containsAny(value, DESTRUCTIVE_TERMS);
+  const touchesProduction = containsAny(value, PRODUCTION_TERMS);
+  const changesCredentials = containsAny(value, CREDENTIAL_TERMS);
+  const changesPermissions = containsAny(value, PERMISSION_TERMS);
+  const externalPublishing = detectsExternalPublishing(value);
+  const deepOperatingSystemChange = containsAny(value, DEEP_OS_TERMS);
+  const mutating = containsAny(value, WRITE_TERMS)
     || destructive
     || touchesProduction
     || changesCredentials
@@ -105,7 +127,7 @@ export function compileChatTask(
       touchesProduction,
       changesCredentials,
       changesPermissions,
-      rewritesHistory: /\b(force[- ]?push|rewrite history|viết lại lịch sử)\b/iu.test(normalized),
+      rewritesHistory: containsAny(value, ['force-push', 'force push', 'rewrite history', 'viết lại lịch sử']),
       deepOperatingSystemChange,
       destructive,
       externalPublishing,
