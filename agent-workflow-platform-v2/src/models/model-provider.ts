@@ -70,7 +70,7 @@ export function getConfiguredModelProvider(): ModelProvider {
     apiKey: config.apiKey,
     baseURL: config.baseUrl,
     useResponses: config.useResponses,
-    strictFeatureValidation: true,
+    strictFeatureValidation: config.provider === 'openai',
   });
   return cachedProvider;
 }
