@@ -60,7 +60,6 @@ if (-not (Test-Path $workspacePath)) {
         allowedScripts = @()
         scheduledTaskPrefix = 'SYSTEM-AI-'
         allowCodexRead = $true
-        allowCodexWrite = $false
         allowLocalRead = $true
         allowLocalWrite = $false
       }
@@ -86,8 +85,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Bridge build failed.' }
 Write-Host 'BRIDGE_READ_ONLY_INSTALL=PASS'
 Write-Host 'CHATGPT_PRIMARY_BRAIN=true'
 Write-Host 'BACKEND_MANAGER_AGENT=false'
+Write-Host 'SPECIALIST_AI_MUTATION=false'
 Write-Host 'LOCAL_WRITE_ENABLED=false'
-Write-Host 'CODEX_WRITE_ENABLED=false'
 Write-Host 'AUTOSTART_REGISTERED=false'
 Write-Host 'CONNECTED_TO_CHATGPT=false'
 Write-Host 'Current ChatGPT plan/tunnel gate must be resolved before connection.'
