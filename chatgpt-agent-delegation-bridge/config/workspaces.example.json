@@ -19,8 +19,8 @@
       "scheduledTaskPrefix": "SYSTEM-AI-",
       "allowCodexRead": true,
       "allowCodexWrite": false,
-      "allowHermesRead": true,
-      "allowHermesWrite": false
+      "allowLocalRead": true,
+      "allowLocalWrite": false
     }
   ]
 }
