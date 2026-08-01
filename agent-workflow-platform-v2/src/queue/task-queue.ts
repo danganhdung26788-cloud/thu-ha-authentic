@@ -16,7 +16,7 @@ export type TaskJobData = Readonly<{
 
 export type TaskJobResult = Readonly<{
   taskId: string;
-  status: 'COMPLETED' | 'WAITING_APPROVAL' | 'RETRY_WAIT' | 'FAILED';
+  status: 'COMPLETED' | 'WAITING_INPUT' | 'WAITING_APPROVAL' | 'RETRY_WAIT' | 'FAILED';
 }>;
 
 function jobKeySegment(value: string): string {
