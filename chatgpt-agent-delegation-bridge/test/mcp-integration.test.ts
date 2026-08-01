@@ -16,7 +16,7 @@ test('official MCP client lists explicit tools and calls delegation_health', asy
     MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
     MCP_AUTH_MODE: 'none',
     CODEX_ENABLED: 'true',
-    HERMES_ENABLED: 'false',
+    LOCAL_EXECUTOR_ENABLED: 'false',
     SPECIALIST_AGENT_ENABLED: 'false',
   });
   const workspaces = WorkspaceRegistry.fromDocument({
@@ -24,10 +24,15 @@ test('official MCP client lists explicit tools and calls delegation_health', asy
     workspaces: [{
       workspaceId: 'test-workspace',
       root: process.cwd(),
+      readRoots: ['.'],
+      writeRoots: [],
+      allowedExecutables: [],
+      allowedScripts: [],
+      scheduledTaskPrefix: 'TEST-',
       allowCodexRead: true,
       allowCodexWrite: false,
-      allowHermesRead: false,
-      allowHermesWrite: false,
+      allowLocalRead: false,
+      allowLocalWrite: false,
     }],
   });
   const service = new DelegationService(config, workspaces);
@@ -49,7 +54,8 @@ test('official MCP client lists explicit tools and calls delegation_health', asy
     assert.ok(names.includes('delegation_health'));
     assert.ok(names.includes('ask_codex'));
     assert.ok(names.includes('execute_codex'));
-    assert.equal(names.includes('inspect_with_hermes'), false);
+    assert.equal(names.includes('inspect_local_runtime'), false);
+    assert.equal(names.includes('execute_local_operations'), false);
     assert.equal(names.includes('ask_specialist_agent'), false);
 
     const result = await client.callTool({ name: 'delegation_health', arguments: {} });
@@ -59,6 +65,7 @@ test('official MCP client lists explicit tools and calls delegation_health', asy
     assert.equal(architecture.chatgptPrimaryBrain, true);
     assert.equal(architecture.backendManagerAgent, false);
     assert.equal(architecture.automaticBackendRouting, false);
+    assert.equal(architecture.v2RuntimeDependency, false);
   } finally {
     await client.close().catch(() => undefined);
     await new Promise<void>((resolve, reject) => {
