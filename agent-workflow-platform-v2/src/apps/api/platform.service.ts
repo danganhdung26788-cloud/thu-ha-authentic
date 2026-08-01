@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { PostgresControlPlaneStore } from '../../control-plane/postgres-store.js';
 import { MinioEvidenceStore } from '../../evidence/minio-evidence-store.js';
 import { createExecutorRegistry } from '../../executors/registry.js';
+import { modelProviderHealthCheck } from '../../models/model-provider.js';
 import { createTaskQueue } from '../../queue/task-queue.js';
 
 const SubmitTaskSchema = z.object({
@@ -12,6 +13,8 @@ const SubmitTaskSchema = z.object({
   idempotencyKey: z.string().min(1),
   ownerId: z.string().min(1),
   workspaceId: z.string().min(1),
+  conversationId: z.string().min(1).nullable().default(null),
+  sourceMessageId: z.string().min(1).nullable().default(null),
   objective: z.string().min(1),
   readScope: z.array(z.string().min(1)).min(1),
   writeScope: z.array(z.string().min(1)).default([]),
@@ -50,6 +53,8 @@ export class PlatformService implements OnApplicationShutdown {
         details: {
           autonomyMode: parsed.autonomyMode,
           riskLevel: parsed.riskLevel,
+          conversationId: parsed.conversationId,
+          sourceMessageId: parsed.sourceMessageId,
           dispatch: 'TRANSACTIONAL_OUTBOX',
         },
       });
@@ -92,7 +97,15 @@ export class PlatformService implements OnApplicationShutdown {
       createExecutorRegistry().entries().map(([, adapter]) => adapter.healthCheck()),
     );
     const adapters = adapterChecks.every(Boolean);
-    return { db, redis, evidence, adapters, ready: db && redis && evidence && adapters };
+    const model = await modelProviderHealthCheck().then((status) => status.ok).catch(() => false);
+    return {
+      db,
+      redis,
+      evidence,
+      adapters,
+      model,
+      ready: db && redis && evidence && adapters && model,
+    };
   }
 
   async onApplicationShutdown(): Promise<void> {
