@@ -76,10 +76,11 @@ jobs:
               [ref]$errors
             )
             foreach ($error in @($errors)) {
-              $allErrors += "${($_.Name)}:$($error.Extent.StartLineNumber): $($error.Message)"
+              $allErrors += "$($_.Name):$($error.Extent.StartLineNumber): $($error.Message)"
             }
             $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
-            if ($bytes | Where-Object { $_ -gt 127 } | Select-Object -First 1) {
+            $nonAscii = @($bytes | Where-Object { $_ -gt 127 } | Select-Object -First 1)
+            if ($nonAscii.Count -gt 0) {
               $allErrors += "$($_.Name): contains non-ASCII bytes"
             }
           }
