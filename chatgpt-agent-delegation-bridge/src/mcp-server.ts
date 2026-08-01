@@ -46,6 +46,15 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
   const server = new McpServer({
     name: 'system-ai-workflow-delegation-bridge',
     version: '0.1.0',
+  }, {
+    instructions: [
+      'ChatGPT is the primary brain and owns the conversation, context, follow-ups, approvals, and final answer.',
+      'Use this server only for explicit specialist delegation when native ChatGPT reasoning or connected tools are insufficient.',
+      'Do not use this server for current weather, web search, email, calendar, Drive search, ordinary writing, or status questions about the conversation.',
+      'Select the specialist by choosing the explicit MCP tool. There is no backend router or Manager Agent.',
+      'Treat specialist output as evidence or advice to evaluate, not as an automatic final answer.',
+      'Read-only tools must not mutate state. Mutating tools require user-facing confirmation and must stay within the supplied scope.',
+    ].join(' '),
   });
 
   server.registerTool(
