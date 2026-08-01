@@ -12,8 +12,8 @@ export const WorkspaceRegistrationSchema = z.object({
   scheduledTaskPrefix: z.string().min(1).max(120).default('SYSTEM-AI-'),
   allowCodexRead: z.boolean().default(true),
   allowCodexWrite: z.boolean().default(false),
-  allowHermesRead: z.boolean().default(true),
-  allowHermesWrite: z.boolean().default(false),
+  allowLocalRead: z.boolean().default(true),
+  allowLocalWrite: z.boolean().default(false),
 });
 
 export const WorkspaceRegistrySchema = z.object({
@@ -34,7 +34,7 @@ export const CodexDelegationInputSchema = CommonDelegationSchema.extend({
   paths: z.array(z.string().trim().min(1).max(1_000)).max(50).default([]),
 });
 
-export const HermesInspectInputSchema = z.object({
+export const LocalInspectInputSchema = z.object({
   workspaceId: z.string().trim().min(1).max(120).optional(),
   kind: z.enum(['system', 'process', 'service', 'scheduled-task', 'docker', 'git']),
   names: z.array(z.string().trim().min(1).max(200)).max(100).default([]),
@@ -42,13 +42,13 @@ export const HermesInspectInputSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(200).optional(),
 });
 
-export const HermesToolCallSchema = z.object({
+export const LocalToolCallSchema = z.object({
   toolId: z.enum(['filesystem.read', 'filesystem.write', 'powershell.execute', 'runtime.inspect', 'scheduled-task.manage']),
   input: z.record(z.string(), z.unknown()),
 });
 
-export const HermesExecuteInputSchema = CommonDelegationSchema.extend({
-  operations: z.array(HermesToolCallSchema).min(1).max(20),
+export const LocalExecuteInputSchema = CommonDelegationSchema.extend({
+  operations: z.array(LocalToolCallSchema).min(1).max(20),
   readPaths: z.array(z.string().trim().min(1).max(1_000)).min(1).max(100),
   writePaths: z.array(z.string().trim().min(1).max(1_000)).min(1).max(100),
 });
@@ -61,7 +61,7 @@ export const SpecialistDelegationInputSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(200).optional(),
 });
 
-export const DelegationTargetSchema = z.enum(['CODEX', 'HERMES', 'SPECIALIST_AGENT']);
+export const DelegationTargetSchema = z.enum(['CODEX', 'LOCAL_EXECUTOR', 'SPECIALIST_AGENT']);
 export const DelegationStatusSchema = z.enum(['SUCCEEDED', 'FAILED', 'BLOCKED']);
 
 export const DelegationResultSchema = z.object({
@@ -83,7 +83,7 @@ export const DelegationResultSchema = z.object({
 export type WorkspaceRegistration = z.infer<typeof WorkspaceRegistrationSchema>;
 export type WorkspaceRegistryDocument = z.infer<typeof WorkspaceRegistrySchema>;
 export type CodexDelegationInput = z.infer<typeof CodexDelegationInputSchema>;
-export type HermesInspectInput = z.infer<typeof HermesInspectInputSchema>;
-export type HermesExecuteInput = z.infer<typeof HermesExecuteInputSchema>;
+export type LocalInspectInput = z.infer<typeof LocalInspectInputSchema>;
+export type LocalExecuteInput = z.infer<typeof LocalExecuteInputSchema>;
 export type SpecialistDelegationInput = z.infer<typeof SpecialistDelegationInputSchema>;
 export type DelegationResult = z.infer<typeof DelegationResultSchema>;
