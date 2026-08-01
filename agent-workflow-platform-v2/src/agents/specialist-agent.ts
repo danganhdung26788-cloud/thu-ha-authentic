@@ -22,9 +22,9 @@ export async function runSpecialistAgent(
   const registered = await new AgentRegistryStore().get('specialist');
   if (registered?.status !== 'ACTIVE') throw new Error('Specialist Agent is not ACTIVE.');
   const env = getEnv();
-  const model = registered.model?.trim()
-    || env.SPECIALIST_MODEL.trim()
-    || env.OPENAI_SPECIALIST_MODEL?.trim();
+  const model = env.SPECIALIST_MODEL.trim()
+    || env.OPENAI_SPECIALIST_MODEL?.trim()
+    || registered.model?.trim();
   if (!model) throw new Error('Specialist model is not configured.');
   const agent = new Agent({
     name: registered.displayName,
