@@ -1,0 +1,63 @@
+name: ChatGPT Delegation Bridge CI
+
+on:
+  pull_request:
+    paths:
+      - "chatgpt-agent-delegation-bridge/**"
+      - "docs/ADR-003-chatgpt-primary-delegation-bridge.md"
+      - ".github/workflows/chatgpt-delegation-bridge-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "chatgpt-agent-delegation-bridge/**"
+      - "docs/ADR-003-chatgpt-primary-delegation-bridge.md"
+      - ".github/workflows/chatgpt-delegation-bridge-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chatgpt-agent-delegation-bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: chatgpt-agent-delegation-bridge/package.json
+      - run: npm install --ignore-scripts
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
+      - name: Architecture boundary
+        shell: bash
+        run: |
+          ! grep -R -E "bullmq|ioredis|chat-page|admin-page|runManagerDecision|manager-agent" src
+          ! grep -R -E "<html|<textarea" src
+      - name: Secret scan
+        shell: bash
+        run: |
+          ! grep -R -E "sk-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY" . \
+            --exclude-dir=node_modules --exclude='*.test.ts'
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: chatgpt-agent-delegation-bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: chatgpt-agent-delegation-bridge/package.json
+      - run: npm install --ignore-scripts
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
