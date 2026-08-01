@@ -44,6 +44,12 @@ const codexInputShape = {
 };
 
 export function createMcpServer(service: DelegationService, config: BridgeConfig): McpServer {
+  const workspaceCapabilities = service.workspaces.list();
+  const localReadAvailable = config.localExecutor.enabled
+    && workspaceCapabilities.some((workspace) => workspace.localRead);
+  const localWriteAvailable = config.localExecutor.enabled
+    && workspaceCapabilities.some((workspace) => workspace.localWrite);
+
   const server = new McpServer({
     name: 'system-ai-workflow-delegation-bridge',
     version: '0.1.0',
@@ -55,8 +61,9 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
       'Select the target by choosing the explicit MCP tool. There is no backend router or Manager Agent.',
       'AI specialist tools are read-only and return analysis, plans, or proposals to ChatGPT. They never mutate the user workspace.',
       'Treat delegated output as evidence or advice to evaluate, not as an automatic final answer.',
-      'Only the explicitly named local executor can mutate allowlisted resources, and mutating calls require user-facing confirmation.',
+      'Only an explicitly published local executor tool can mutate allowlisted resources, and mutating calls require user-facing confirmation.',
       'The local runtime executor is not an AI specialist and must never be described as Hermes or another model.',
+      'A capability that is disabled by server or workspace policy is not published as an MCP tool.',
     ].join(' '),
   });
 
@@ -103,7 +110,7 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
     );
   }
 
-  if (config.localExecutor.enabled) {
+  if (localReadAvailable) {
     server.registerTool(
       'inspect_local_runtime',
       {
@@ -127,7 +134,9 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
       },
       async (input) => resultForModel(await service.inspectLocalRuntime(input)),
     );
+  }
 
+  if (localWriteAvailable) {
     server.registerTool(
       'execute_local_operations',
       {

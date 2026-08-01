@@ -16,7 +16,14 @@ try {
   const tools = await client.listTools();
   const names = tools.tools.map((tool) => tool.name).sort();
   if (!names.includes('delegation_health')) throw new Error('delegation_health is missing.');
+  if (!names.includes('ask_codex')) throw new Error('ask_codex is missing from the default read-only profile.');
+  if (!names.includes('inspect_local_runtime')) {
+    throw new Error('inspect_local_runtime is missing from the default read-only profile.');
+  }
   if (names.includes('execute_codex')) throw new Error('Direct Codex mutation tool must not be exposed.');
+  if (names.includes('execute_local_operations')) {
+    throw new Error('Local mutation tool must not be exposed while workspace write policy is disabled.');
+  }
   const health = await client.callTool({ name: 'delegation_health', arguments: {} });
   if (health.isError) throw new Error('delegation_health returned an MCP error.');
   const structured = health.structuredContent || {};
