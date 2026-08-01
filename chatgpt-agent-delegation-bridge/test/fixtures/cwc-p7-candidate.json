@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "1.0.0",
+  "phase": "CWC-P7",
+  "status": "CANDIDATE_READY_NOT_ACTIVATED",
+  "recordedAt": "2026-08-01T14:00:00.000Z",
+  "repositoryCommit": "2222222222222222222222222222222222222222",
+  "gates": {
+    "p3": "PASS",
+    "p4": "PASS",
+    "p5": "PASS",
+    "p6": "PASS"
+  },
+  "artifacts": {
+    "p3Evidence": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "p4Evidence": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "p5Evidence": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "p6Evidence": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "readOnlyConfig": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "writeConfig": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "rollbackReady": true,
+  "monitoringReady": true,
+  "backupReady": true,
+  "ownerApproval": false,
+  "production": false,
+  "blockReason": ""
+}
