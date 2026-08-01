@@ -11,7 +11,7 @@ ChatGPT answers directly and uses its native/connected tools whenever possible. 
 - a small stateless MCP server;
 - explicit specialist tools selected by ChatGPT;
 - Codex delegation through the official Codex SDK;
-- Hermes delegation through a bounded authenticated adapter;
+- direct bounded Hermes-style host execution inside this package;
 - optional specialist agents through OpenAI Agents SDK;
 - structured results returned to the same ChatGPT conversation.
 
@@ -23,7 +23,8 @@ ChatGPT answers directly and uses its native/connected tools whenever possible. 
 - not a Manager/router model;
 - not a PostgreSQL/Redis/BullMQ system;
 - not a Shadow/cutover path away from ChatGPT;
-- not an automatic fallback to a paid provider.
+- not an automatic fallback to a paid provider;
+- not dependent on `agent-workflow-platform-v2` at runtime.
 
 ## Architecture
 
@@ -50,7 +51,7 @@ Agents SDK runs model-backed agent loops; it is not a transport. Adding a hidden
 Therefore:
 
 - Codex uses its official specialist SDK;
-- Hermes uses its bounded specialist adapter;
+- bounded host operations execute directly under the bridge workspace policy;
 - a model-backed specialist uses Agents SDK;
 - no generic backend Manager is created.
 
@@ -70,11 +71,11 @@ Approved repository work. Codex runs with `sandboxMode=workspace-write`, no prod
 
 ### `inspect_with_hermes`
 
-Bounded read-only system/process/service/Scheduled Task/Docker/Git inspection.
+Bounded read-only system/process/service/Scheduled Task/Docker/Git inspection. No V2 adapter, port, or Scheduled Task is required.
 
 ### `execute_with_hermes`
 
-Approved structured operations only. Every operation and read/write scope is explicit. Arbitrary inline shell input is not accepted.
+Approved structured operations only. Every operation and read/write scope is explicit. The server independently enforces registered roots, scripts, executables, and Scheduled Task prefixes. Arbitrary inline shell input is not accepted.
 
 ### `ask_specialist_agent`
 
@@ -84,23 +85,39 @@ Optional Agents SDK specialist. It is registered only when a model and provider 
 
 - Server-side workspace allowlist.
 - Server-side owner identity.
+- Registered read/write roots, scripts, executables, and Scheduled Task prefix.
 - Read/write capabilities set per workspace.
 - Separate read-only and mutating MCP tools.
 - MCP annotations expose mutation/destructive behavior to ChatGPT approval handling.
 - Host-header allowlist and localhost-only unauthenticated development mode.
 - Production refuses unauthenticated startup.
-- Secrets are not tool parameters and are redacted from errors.
+- Secrets are not tool parameters and are redacted from errors and host output.
 - Request, output, timeout, path, and operation limits.
+- No shell-based process spawning.
 - In-memory idempotency only; no business database or queue.
+
+## ChatGPT availability gate
+
+Building and testing the MCP server is separate from connecting it to this ChatGPT project.
+
+Current OpenAI product availability must be checked before deployment:
+
+- ChatGPT Plus: custom MCP developer connection is not currently available.
+- ChatGPT Pro: custom MCP is limited to read/fetch actions in developer mode.
+- ChatGPT Business and Enterprise/Edu: full MCP, including write/modify actions, is available in beta under workspace administration.
+
+Therefore the bridge may be code-complete while connection to the current ChatGPT account remains product-plan blocked. Do not replace ChatGPT with a new UI to bypass this limitation.
+
+ChatGPT cannot connect directly to a local MCP server. A supported Secure MCP Tunnel or a reviewed remote HTTPS deployment is required. Do not expose an unauthenticated local endpoint to the public internet.
 
 ## Setup
 
 Requirements:
 
 - Node.js 22+;
-- npm 11+;
+- npm 10.9+;
 - an existing local Codex login when Codex is enabled;
-- an existing authenticated Hermes adapter only when Hermes is enabled.
+- Windows only for PowerShell, Windows service, and Scheduled Task operations.
 
 ```powershell
 Set-Location "D:\HermesAgent\workspace\thu-ha-authentic\chatgpt-agent-delegation-bridge"
@@ -126,9 +143,9 @@ No separate UI is created.
 
 ## ChatGPT custom app connection
 
-For local development, expose the MCP endpoint through a controlled HTTPS tunnel and add the resulting `/mcp` endpoint in ChatGPT developer/connectors settings. Do not expose an unauthenticated development endpoint for routine or production use.
+For a supported ChatGPT plan, connect the local service through Secure MCP Tunnel or deploy behind a controlled HTTPS/OAuth boundary, then add the `/mcp` endpoint in ChatGPT developer app settings.
 
-Production deployment must add a supported authenticated boundary, TLS, an allowlisted hostname, and server-side secret storage. The bridge intentionally refuses `NODE_ENV=production` with `MCP_AUTH_MODE=none`.
+Production deployment must include supported authentication, TLS, an allowlisted hostname, and server-side secret storage. The bridge intentionally refuses `NODE_ENV=production` with `MCP_AUTH_MODE=none`.
 
 ## Initial safe configuration
 
@@ -139,9 +156,11 @@ Codex read:   allowed
 Codex write:  blocked
 Hermes read:  allowed
 Hermes write: blocked
+Write roots:  none
+Scripts:      none
 ```
 
-Write access is enabled only after read-only UAT passes and the ChatGPT tool approval behavior is verified.
+Write access is enabled only after read-only UAT passes and the ChatGPT tool approval behavior is verified on a plan that supports write tools.
 
 ## Acceptance tests
 
@@ -157,11 +176,13 @@ The first acceptance set is product-first:
 8. Disabled specialist targets return `BLOCKED`; no fallback occurs.
 9. Duplicate idempotency keys do not execute twice within the process TTL.
 10. The bridge has no chat UI, business database, queue, or backend Manager.
+11. The official MCP client can initialize, list tools, and call `delegation_health`.
+12. Direct Hermes file writes cannot escape registered and request scopes.
 
 ## Legacy V2 boundary
 
-`agent-workflow-platform-v2` is not the foundation of this package. The new bridge does not import its UI, database, queue, worker, routing model, or conversation code.
+`agent-workflow-platform-v2` is an aborted replacement-platform experiment. It is not the foundation of this package, and the new bridge imports none of its UI, database, queue, worker, routing model, conversation code, or host adapter runtime.
 
-Existing Codex/Hermes execution components may be used only through clean specialist boundaries while they are independently replaced or reviewed.
+Do not deploy or resume V2. Preserve it only until the new architecture is reviewed and the old runtime is safely stopped without deleting evidence.
 
 See `docs/ADR-003-chatgpt-primary-delegation-bridge.md`.
