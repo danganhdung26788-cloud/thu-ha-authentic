@@ -62,11 +62,14 @@ function containsAny(value: string, terms: readonly string[]): boolean {
   return terms.some((term) => value.includes(term));
 }
 
+function removePhrases(value: string, phrases: readonly string[]): string {
+  return phrases.reduce((current, phrase) => current.split(phrase).join(' '), value);
+}
+
 function detectsExternalPublishing(value: string): boolean {
-  const explicitlyExternal = containsAny(value, EXTERNAL_PUBLISH_TERMS);
-  const genericPublish = containsAny(value, [' publish ', 'xuất bản']);
-  const negatedOrDraft = containsAny(value, PUBLISH_NEGATIONS);
-  return explicitlyExternal || (genericPublish && !negatedOrDraft);
+  const publishRelevantText = removePhrases(value, PUBLISH_NEGATIONS);
+  return containsAny(publishRelevantText, EXTERNAL_PUBLISH_TERMS)
+    || containsAny(publishRelevantText, [' publish ', 'xuất bản']);
 }
 
 export function compileChatTask(
