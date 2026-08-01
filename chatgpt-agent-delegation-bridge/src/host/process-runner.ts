@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { basename, delimiter, isAbsolute, resolve } from 'node:path';
 
 export type ProcessRunResult = Readonly<{
   exitCode: number;
@@ -9,6 +11,23 @@ export type ProcessRunResult = Readonly<{
   durationMs: number;
 }>;
 
+function resolveExecutable(executable: string): string {
+  if (isAbsolute(executable)) {
+    if (!existsSync(executable)) throw new Error(`Executable was not found: ${executable}`);
+    return resolve(executable);
+  }
+  if (!executable || executable !== basename(executable) || /[\\/]/u.test(executable)) {
+    throw new Error('Process executable must be an absolute path or a plain command name.');
+  }
+  for (const entry of (process.env.PATH ?? '').split(delimiter)) {
+    const directory = entry.trim().replace(/^"|"$/g, '');
+    if (!directory) continue;
+    const candidate = resolve(directory, executable);
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error(`Executable was not found on the system PATH: ${executable}`);
+}
+
 export async function runProcess(input: Readonly<{
   executable: string;
   args: readonly string[];
@@ -17,8 +36,9 @@ export async function runProcess(input: Readonly<{
   maxOutputBytes: number;
 }>): Promise<ProcessRunResult> {
   const started = performance.now();
-  return new Promise((resolve, reject) => {
-    const child = spawn(input.executable, [...input.args], {
+  const executable = resolveExecutable(input.executable);
+  return new Promise((resolveResult, reject) => {
+    const child = spawn(executable, [...input.args], {
       cwd: input.cwd,
       windowsHide: true,
       shell: false,
@@ -29,11 +49,15 @@ export async function runProcess(input: Readonly<{
     let outputBytes = 0;
     let timedOut = false;
     let completed = false;
+    let timer: NodeJS.Timeout | undefined;
 
+    const clearTimer = () => {
+      if (timer) clearTimeout(timer);
+    };
     const finishReject = (error: Error) => {
       if (completed) return;
       completed = true;
-      clearTimeout(timer);
+      clearTimer();
       child.kill();
       reject(error);
     };
@@ -51,8 +75,8 @@ export async function runProcess(input: Readonly<{
     child.once('close', (code, signal) => {
       if (completed) return;
       completed = true;
-      clearTimeout(timer);
-      resolve({
+      clearTimer();
+      resolveResult({
         exitCode: code ?? (timedOut ? 124 : 1),
         signal,
         stdout: Buffer.concat(stdout).toString('utf8').trim(),
@@ -61,7 +85,7 @@ export async function runProcess(input: Readonly<{
         durationMs: Math.round(performance.now() - started),
       });
     });
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       timedOut = true;
       child.kill();
     }, input.timeoutMs);
