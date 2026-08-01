@@ -9,8 +9,7 @@ import { WorkspaceRegistry } from '../src/workspace-registry.js';
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'delegation-codex-boundary-'));
-  await mkdir(join(root, 'allowed'), { recursive: true });
-  await mkdir(join(root, 'private'), { recursive: true });
+  await mkdir(join(root, 'focus'), { recursive: true });
   resetConfigForTests();
   const config = getConfig({
     NODE_ENV: 'test',
@@ -23,7 +22,7 @@ async function fixture() {
     workspaces: [{
       workspaceId: 'test',
       root,
-      readRoots: ['allowed'],
+      readRoots: ['.'],
       writeRoots: [],
       allowedExecutables: [],
       allowedScripts: [],
@@ -54,25 +53,6 @@ test('ask_codex rejects focus paths outside the registered workspace before SDK 
   }
 });
 
-test('ask_codex rejects a path inside the workspace but outside registered read roots', async () => {
-  const { root, service } = await fixture();
-  try {
-    await assert.rejects(
-      service.askCodex({
-        objective: 'Inspect a private path that was not granted.',
-        workspaceId: 'test',
-        paths: ['private'],
-        responseFormat: 'implementation-plan',
-        idempotencyKey: 'codex-boundary-read-root-001',
-      }),
-      /outside registered read roots/,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-    resetConfigForTests();
-  }
-});
-
 test('Codex input schema exposes proposal formats but no mutation mode', async () => {
   const { root, service } = await fixture();
   try {
@@ -80,12 +60,26 @@ test('Codex input schema exposes proposal formats but no mutation mode', async (
       service.askCodex({
         objective: 'Reject an invalid response mode before SDK execution.',
         workspaceId: 'test',
-        paths: ['allowed'],
+        paths: ['focus'],
         responseFormat: 'workspace-write',
         idempotencyKey: 'codex-boundary-format-001',
       }),
       /Invalid option|responseFormat/,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    resetConfigForTests();
+  }
+});
+
+test('Codex health declares registered workspace root as the read boundary', async () => {
+  const { root, service } = await fixture();
+  try {
+    const health = await service.health();
+    const targets = health.targets as Record<string, unknown>;
+    const codex = targets.codex as Record<string, unknown>;
+    assert.equal(codex.mode, 'READ_ONLY_PROPOSAL');
+    assert.equal(codex.readBoundary, 'REGISTERED_WORKSPACE_ROOT');
   } finally {
     await rm(root, { recursive: true, force: true });
     resetConfigForTests();
