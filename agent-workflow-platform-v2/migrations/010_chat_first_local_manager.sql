@@ -124,8 +124,7 @@ CREATE INDEX IF NOT EXISTS idx_diagnostics_task
 
 UPDATE agent_registry
 SET provider = 'ollama',
-    model = COALESCE(NULLIF(model, ''), 'qwen3:4b'),
+    model = 'qwen3:4b',
     updated_at = now(),
     version = version + 1
-WHERE agent_id IN ('manager','specialist')
-  AND provider = 'openai';
+WHERE agent_id IN ('manager','specialist');
