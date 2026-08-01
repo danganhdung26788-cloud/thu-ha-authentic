@@ -67,13 +67,13 @@ const HERMES_TERMS = [
   'docker', 'scheduled task', 'runtime', 'file log', 'log gần nhất', 'sao lưu',
   'backup', 'khởi động lại dịch vụ', 'dung lượng ổ', 'file cấu hình',
   'bản sao của file', 'file nháp', 'cổng 3201', 'cổng 3202', ' pid',
-  'script', 'manifest của bản backup', 'api key', 'mật khẩu',
+  'script', 'manifest của bản backup',
 ];
 const SPECIALIST_TERMS = [
   'phân loại', 'trích xuất', 'rút trích', 'so sánh hai bảng',
-  'báo cáo hành chính', 'chuẩn hóa chính tả', 'danh sách nhiệm vụ',
-  'biên bản', 'phân tích dữ liệu khảo sát', 'bảng đối chiếu',
-  'tóm tắt tài liệu', 'phân tích tài liệu',
+  'báo cáo hành chính', 'chuẩn hóa chính tả', 'tạo danh sách nhiệm vụ',
+  'nhiệm vụ và thời hạn từ biên bản', 'phân tích dữ liệu khảo sát',
+  'bảng đối chiếu', 'tóm tắt tài liệu', 'phân tích tài liệu',
 ];
 
 function normalizeText(value: string): string {
@@ -127,6 +127,7 @@ export function requiresDeterministicApproval(
     'xóa vĩnh viễn nhánh', 'xoá vĩnh viễn nhánh', 'xóa toàn bộ docker volume',
     'xoá toàn bộ docker volume', 'phục hồi backup đè', 'restore overwrite',
     'bật thanh toán tự động', 'số liệu chưa được phê duyệt',
+    'đăng công khai', 'chia sẻ ra ngoài', 'kênh công cộng', 'toàn bộ internet',
   ]) || /mua thêm\s+\d+\s*usd/iu.test(value);
 }
 
