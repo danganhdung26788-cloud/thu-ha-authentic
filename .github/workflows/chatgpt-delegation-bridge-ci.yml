@@ -62,3 +62,28 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run build
+      - name: Parse Windows PowerShell 5.1 scripts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $allErrors = @()
+          Get-ChildItem -LiteralPath '.\scripts\windows' -Filter '*.ps1' -File | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            foreach ($error in @($errors)) {
+              $allErrors += "${($_.Name)}:$($error.Extent.StartLineNumber): $($error.Message)"
+            }
+            $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+            if ($bytes | Where-Object { $_ -gt 127 } | Select-Object -First 1) {
+              $allErrors += "$($_.Name): contains non-ASCII bytes"
+            }
+          }
+          if ($allErrors.Count -gt 0) {
+            $allErrors | ForEach-Object { Write-Error $_ }
+            throw 'PowerShell compatibility gate failed.'
+          }
