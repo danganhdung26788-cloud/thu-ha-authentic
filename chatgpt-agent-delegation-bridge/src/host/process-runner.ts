@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { basename, delimiter, isAbsolute, resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 
 export type ProcessRunResult = Readonly<{
   exitCode: number;
@@ -12,20 +12,12 @@ export type ProcessRunResult = Readonly<{
 }>;
 
 function resolveExecutable(executable: string): string {
-  if (isAbsolute(executable)) {
-    if (!existsSync(executable)) throw new Error(`Executable was not found: ${executable}`);
-    return resolve(executable);
+  if (!isAbsolute(executable)) {
+    throw new Error('Process executable must be an absolute path resolved by the workspace allowlist.');
   }
-  if (!executable || executable !== basename(executable) || /[\\/]/u.test(executable)) {
-    throw new Error('Process executable must be an absolute path or a plain command name.');
-  }
-  for (const entry of (process.env.PATH ?? '').split(delimiter)) {
-    const directory = entry.trim().replace(/^"|"$/g, '');
-    if (!directory) continue;
-    const candidate = resolve(directory, executable);
-    if (existsSync(candidate)) return candidate;
-  }
-  throw new Error(`Executable was not found on the system PATH: ${executable}`);
+  const absolute = resolve(executable);
+  if (!existsSync(absolute)) throw new Error(`Executable was not found: ${absolute}`);
+  return absolute;
 }
 
 export async function runProcess(input: Readonly<{
