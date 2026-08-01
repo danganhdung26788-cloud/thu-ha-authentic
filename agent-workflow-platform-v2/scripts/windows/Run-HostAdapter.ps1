@@ -5,12 +5,23 @@ param(
   [string]$Role,
 
   [Parameter(Mandatory = $false)]
-  [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+  [string]$ProjectRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$ProjectRoot = (Resolve-Path $ProjectRoot).Path
+
+$ScriptDirectory = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+  $PSScriptRoot
+} else {
+  Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
+  $ProjectRoot = (Resolve-Path (Join-Path $ScriptDirectory '..\..')).Path
+} else {
+  $ProjectRoot = (Resolve-Path $ProjectRoot).Path
+}
+
 $envFile = Join-Path $ProjectRoot "runtime\host-adapter.$Role.env"
 $entrypoint = Join-Path $ProjectRoot 'dist\src\apps\host-adapter\main.js'
 $logDir = Join-Path $ProjectRoot 'runtime\logs'
@@ -32,5 +43,5 @@ Get-Content -Path $envFile | ForEach-Object {
 $stdout = Join-Path $logDir "$Role.stdout.log"
 $stderr = Join-Path $logDir "$Role.stderr.log"
 Set-Location $ProjectRoot
-& node $entrypoint 1>> $stdout 2>> $stderr
+& node.exe $entrypoint 1>> $stdout 2>> $stderr
 exit $LASTEXITCODE
