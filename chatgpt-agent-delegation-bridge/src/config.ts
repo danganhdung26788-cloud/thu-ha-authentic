@@ -30,7 +30,7 @@ const EnvSchema = z.object({
   CODEX_REASONING_EFFORT: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).default('high'),
   CODEX_NETWORK_ACCESS: booleanString('false'),
 
-  HERMES_ENABLED: booleanString('false'),
+  LOCAL_EXECUTOR_ENABLED: booleanString('false'),
 
   SPECIALIST_AGENT_ENABLED: booleanString('false'),
   SPECIALIST_MODEL: optionalString(),
@@ -59,7 +59,7 @@ export type BridgeConfig = Readonly<{
     reasoningEffort: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
     networkAccess: boolean;
   }>;
-  hermes: Readonly<{
+  localExecutor: Readonly<{
     enabled: boolean;
   }>;
   specialist: Readonly<{
@@ -113,8 +113,8 @@ export function getConfig(source: NodeJS.ProcessEnv = process.env): BridgeConfig
       reasoningEffort: env.CODEX_REASONING_EFFORT,
       networkAccess: env.CODEX_NETWORK_ACCESS,
     },
-    hermes: {
-      enabled: env.HERMES_ENABLED,
+    localExecutor: {
+      enabled: env.LOCAL_EXECUTOR_ENABLED,
     },
     specialist: {
       enabled: env.SPECIALIST_AGENT_ENABLED,
