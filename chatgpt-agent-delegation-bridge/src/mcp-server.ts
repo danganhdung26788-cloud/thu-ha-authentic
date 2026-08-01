@@ -20,11 +20,11 @@ function resultForModel(result: DelegationResult) {
     content: [{
       type: 'text' as const,
       text: [
-        `Specialist target: ${result.target}`,
+        `Delegation target: ${result.target}`,
         `Status: ${result.status}`,
         result.summary,
         result.warnings.length ? `Warnings: ${result.warnings.join(' | ')}` : '',
-        'Evaluate this specialist result yourself before presenting or acting on it. ChatGPT remains responsible for the final answer.',
+        'Evaluate this result yourself before presenting or acting on it. ChatGPT remains responsible for the final answer.',
       ].filter(Boolean).join('\n'),
     }],
     structuredContent: result,
@@ -49,19 +49,20 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
   }, {
     instructions: [
       'ChatGPT is the primary brain and owns the conversation, context, follow-ups, approvals, and final answer.',
-      'Use this server only for explicit specialist delegation when native ChatGPT reasoning or connected tools are insufficient.',
+      'Use this server only for explicit specialist delegation or bounded local execution when native ChatGPT reasoning or connected tools are insufficient.',
       'Do not use this server for current weather, web search, email, calendar, Drive search, ordinary writing, or status questions about the conversation.',
-      'Select the specialist by choosing the explicit MCP tool. There is no backend router or Manager Agent.',
-      'Treat specialist output as evidence or advice to evaluate, not as an automatic final answer.',
+      'Select the target by choosing the explicit MCP tool. There is no backend router or Manager Agent.',
+      'Treat delegated output as evidence or advice to evaluate, not as an automatic final answer.',
       'Read-only tools must not mutate state. Mutating tools require user-facing confirmation and must stay within the supplied scope.',
+      'The local runtime executor is not an AI specialist and must never be described as Hermes or another model.',
     ].join(' '),
   });
 
   server.registerTool(
     'delegation_health',
     {
-      title: 'Check specialist delegation availability',
-      description: 'Use only to verify which specialist delegation targets are available. This does not answer user questions and does not create a task.',
+      title: 'Check delegation availability',
+      description: 'Use only to verify which delegation targets and local capabilities are available. This does not answer user questions and does not create a task.',
       inputSchema: {},
       annotations: {
         readOnlyHint: true,
@@ -119,12 +120,15 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
     );
   }
 
-  if (config.hermes.enabled) {
+  if (config.localExecutor.enabled) {
     server.registerTool(
-      'inspect_with_hermes',
+      'inspect_local_runtime',
       {
-        title: 'Inspect the local runtime with Hermes',
-        description: 'Use only when ChatGPT needs bounded inspection of the allowlisted Windows/runtime environment. This tool is read-only.',
+        title: 'Inspect the allowlisted local runtime',
+        description: [
+          'Use only when ChatGPT needs bounded inspection of the allowlisted local Windows/runtime environment.',
+          'This is a read-only execution capability, not an AI model or specialist.',
+        ].join(' '),
         inputSchema: {
           workspaceId: z.string().trim().min(1).max(120).optional(),
           kind: z.enum(['system', 'process', 'service', 'scheduled-task', 'docker', 'git']),
@@ -138,16 +142,17 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
           openWorldHint: false,
         },
       },
-      async (input) => resultForModel(await service.inspectWithHermes(input)),
+      async (input) => resultForModel(await service.inspectLocalRuntime(input)),
     );
 
     server.registerTool(
-      'execute_with_hermes',
+      'execute_local_operations',
       {
-        title: 'Execute bounded local operations with Hermes',
+        title: 'Execute bounded local operations',
         description: [
           'Call only after explicit user approval for the exact bounded local operations.',
           'Every operation, read path, and write path must be supplied explicitly.',
+          'This is a controlled executor, not an AI specialist.',
           'Do not use this tool for general questions or tasks ChatGPT can perform directly.',
         ].join(' '),
         inputSchema: {
@@ -171,7 +176,7 @@ export function createMcpServer(service: DelegationService, config: BridgeConfig
           openWorldHint: false,
         },
       },
-      async (input) => resultForModel(await service.executeWithHermes(input)),
+      async (input) => resultForModel(await service.executeLocalOperations(input)),
     );
   }
 
