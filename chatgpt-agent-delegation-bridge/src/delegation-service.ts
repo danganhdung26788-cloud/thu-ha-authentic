@@ -33,7 +33,7 @@ export class DelegationService {
     readonly workspaces: WorkspaceRegistry,
   ) {
     this.#codex = new CodexSpecialist(config);
-    this.#hermes = new HermesSpecialist(config);
+    this.#hermes = new HermesSpecialist(config, workspaces);
     this.#specialist = new AgentsSdkSpecialist(config);
   }
 
@@ -67,7 +67,6 @@ export class DelegationService {
   }
 
   async health(): Promise<Record<string, unknown>> {
-    const hermes = await this.hermesHealth();
     return {
       ok: this.config.codex.enabled || this.config.hermes.enabled || this.config.specialist.enabled,
       architecture: {
@@ -76,10 +75,11 @@ export class DelegationService {
         automaticBackendRouting: false,
         separateChatUi: false,
         persistentBusinessState: false,
+        v2RuntimeDependency: false,
       },
       targets: {
         codex: { enabled: this.config.codex.enabled },
-        hermes,
+        hermes: this.#hermes.health(),
         specialistAgent: {
           enabled: this.config.specialist.enabled,
           modelConfigured: Boolean(this.config.specialist.model),
@@ -87,22 +87,6 @@ export class DelegationService {
       },
       workspaces: this.workspaces.list(),
     };
-  }
-
-  private async hermesHealth(): Promise<Record<string, unknown>> {
-    if (!this.config.hermes.enabled) return { enabled: false, ready: false };
-    const url = this.config.hermes.adapterUrl;
-    const token = this.config.hermes.adapterToken;
-    if (!url || !token) return { enabled: true, ready: false, error: 'not configured' };
-    try {
-      const response = await fetch(new URL('/health', url), {
-        headers: { authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(5_000),
-      });
-      return { enabled: true, ready: response.ok };
-    } catch (error) {
-      return { enabled: true, ready: false, error: redactSecrets(error, 2_048) };
-    }
   }
 
   private async deduplicate(
