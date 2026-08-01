@@ -47,6 +47,19 @@ function Read-EnvValues([string]$Path) {
   return $values
 }
 
+function Set-EnvValue([string]$Content, [string]$Name, [string]$Value) {
+  $escaped = [Regex]::Escape($Name)
+  if ($Content -match "(?m)^$escaped=") {
+    return [Regex]::Replace($Content, "(?m)^$escaped=.*$", "$Name=$Value")
+  }
+  return $Content.TrimEnd() + "`r`n$Name=$Value`r`n"
+}
+
+function Write-Utf8NoBom([string]$Path, [string]$Content) {
+  $encoding = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($Path, $Content, $encoding)
+}
+
 Assert-Command 'node.exe'
 Assert-Command 'npm.cmd'
 Assert-Command 'docker.exe'
@@ -61,18 +74,33 @@ $envPath = Join-Path $ProjectRoot '.env'
 if (-not (Test-Path $envPath)) {
   & (Join-Path $ScriptDirectory 'New-AgentV2Configuration.ps1') -ProjectRoot $ProjectRoot -WorkspaceRoot $WorkspaceRoot
 }
+
+$gitCommit = (& git.exe rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($gitCommit)) {
+  throw 'Unable to resolve the current Git commit.'
+}
+$envContent = Get-Content -Raw -LiteralPath $envPath
+$envContent = Set-EnvValue $envContent 'RUNTIME_GIT_COMMIT' $gitCommit
+Write-Utf8NoBom -Path $envPath -Content $envContent
 $envValues = Read-EnvValues $envPath
 
 if ($InfrastructureOnly -and $EnterShadow) {
   throw '-EnterShadow is not allowed with -InfrastructureOnly.'
 }
-if (-not $InfrastructureOnly) {
-  foreach ($required in @('OPENAI_API_KEY', 'OPENAI_MANAGER_MODEL', 'OPENAI_SPECIALIST_MODEL')) {
-    if (-not $envValues[$required]) {
-      throw "$required is empty. Configure approved OpenAI credentials/models or use -InfrastructureOnly."
-    }
+foreach ($required in @('MODEL_PROVIDER', 'MODEL_BASE_URL', 'MANAGER_MODEL', 'SPECIALIST_MODEL')) {
+  if (-not $envValues[$required]) {
+    throw "$required is empty. Local Manager configuration is incomplete."
   }
 }
+if ($envValues['MODEL_PROVIDER'] -eq 'openai' -and -not $envValues['OPENAI_API_KEY']) {
+  throw 'OPENAI_API_KEY is required only when MODEL_PROVIDER=openai. The default local Ollama provider does not require it.'
+}
+if ($envValues['MODEL_PROVIDER'] -ne 'ollama' -and $envValues['MODEL_PROVIDER'] -ne 'openai') {
+  throw "Unsupported MODEL_PROVIDER: $($envValues['MODEL_PROVIDER'])"
+}
+
+$attachmentDirectory = Join-Path $ProjectRoot 'runtime\chat-attachments'
+New-Item -ItemType Directory -Force -Path $attachmentDirectory | Out-Null
 
 Write-Host 'Installing locked dependencies...'
 & npm.cmd ci --ignore-scripts
@@ -99,12 +127,13 @@ if ($ConfigureFirewall) {
   & (Join-Path $ScriptDirectory 'Register-AgentV2FirewallRules.ps1') -ApproveFirewallChange -Confirm:$false
 }
 
-Write-Host 'Starting isolated V2 control plane...'
+Write-Host 'Starting isolated V2 control plane and local Manager model...'
 & docker.exe compose --env-file .env -f compose.yml up -d --build
 if ($LASTEXITCODE -ne 0) { throw 'Docker Compose deployment failed.' }
 
 & (Join-Path $ScriptDirectory 'Register-AgentV2ScheduledTasks.ps1') -ProjectRoot $ProjectRoot
-Start-Sleep -Seconds 5
+& (Join-Path $ScriptDirectory 'Install-WorkflowV2ChatApp.ps1') -ProjectRoot $ProjectRoot
+Start-Sleep -Seconds 8
 & (Join-Path $ScriptDirectory 'Test-AgentV2.ps1') -ProjectRoot $ProjectRoot
 
 if ($EnterShadow) {
@@ -112,9 +141,10 @@ if ($EnterShadow) {
 }
 
 if ($InfrastructureOnly) {
-  Write-Host 'Workflow AI V2 infrastructure deployment PASS; AI task execution remains intentionally inactive.'
+  Write-Host 'Workflow AI V2 compatibility deployment PASS. Local model is installed, but Shadow remains blocked.'
 } else {
-  Write-Host 'Workflow AI V2 isolated runtime deployment PASS.'
+  Write-Host 'Workflow AI V2 chat-first isolated runtime deployment PASS.'
 }
-Write-Host 'V1 remains unchanged. Cutover state remains V1_ONLY unless -EnterShadow was supplied.'
-Write-Host 'Gemini remains disabled and has no API cost.'
+Write-Host 'Normal use: open the Workflow AI shortcut and type one chat message.'
+Write-Host 'V1 remains unchanged. Cutover state remains V1_ONLY unless -EnterShadow was explicitly supplied.'
+Write-Host 'OpenAI and Gemini API billing remain disabled by default.'
