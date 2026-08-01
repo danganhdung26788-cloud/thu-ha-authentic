@@ -4,9 +4,15 @@ This procedure validates the delegation bridge locally without connecting it to 
 
 ## Product gate
 
-The current ChatGPT Plus account cannot attach this custom MCP bridge. Completing this UAT does not mean the bridge is connected to the current ChatGPT project.
+Do not assume that this bridge is connected to the current ChatGPT account merely because local UAT passes.
 
-Do not create another user interface to bypass the plan limitation.
+- Full custom MCP write/modify support requires an eligible ChatGPT Business or Enterprise/Edu workspace.
+- Pro custom MCP developer access is limited to read/fetch.
+- Availability of a custom MCP connection on the current Plus account must be verified in the live ChatGPT web UI.
+- Custom MCP apps are web-only at present.
+- ChatGPT cannot connect directly to localhost; a supported Secure MCP Tunnel or reviewed remote HTTPS deployment is required.
+
+Do not create another chat interface to bypass product-plan or connection limitations.
 
 ## Safety state
 
@@ -14,6 +20,7 @@ Do not create another user interface to bypass the plan limitation.
 CHATGPT_PRIMARY_BRAIN=true
 BACKEND_MANAGER_AGENT=false
 AUTOMATIC_BACKEND_ROUTING=false
+SEPARATE_CHAT_UI=false
 SPECIALIST_AI_MUTATION=false
 CODEX_MODE=READ_ONLY_PROPOSAL
 LOCAL_WRITE=false
@@ -22,63 +29,68 @@ CONNECTED_TO_CHATGPT=false
 V2_RESUME=false
 ```
 
-## Install and build
+## One-command UAT
 
-Run only after PR #57 is reviewed and merged:
+Run after the bridge code is present on the Windows machine:
 
 ```powershell
 Set-Location "D:\HermesAgent\workspace\thu-ha-authentic\chatgpt-agent-delegation-bridge"
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-.\scripts\windows\Install-BridgeReadOnly.ps1
+.\scripts\windows\Invoke-BridgeReadOnlyUat.ps1
 ```
 
-The script creates local `.env` and `config/workspaces.json` only when missing. It uses locked dependencies, runs TypeScript checks, tests, and build. It does not register a Scheduled Task, enable local write access, or expose a specialist-AI mutation tool.
-
-## Start locally
-
-```powershell
-.\scripts\windows\Start-Bridge.ps1
-```
-
-Expected:
+The entrypoint performs the complete bounded sequence:
 
 ```text
-BRIDGE_READY=true
-CONNECTED_TO_CHATGPT=false
+locked install
+-> TypeScript check
+-> unit/security/MCP tests
+-> build
+-> local bridge start
+-> HTTP identity check
+-> official MCP client initialize/list/call
+-> architecture invariant verification
+-> receipt write
+-> safe stop
 ```
 
-## MCP protocol test
+It creates `runtime/cwc-p3-read-only-uat-latest.json`. By default the bridge is stopped after PASS. Use `-KeepRunning` only when a later local inspection step is planned:
 
 ```powershell
-.\scripts\windows\Test-Bridge.ps1
+.\scripts\windows\Invoke-BridgeReadOnlyUat.ps1 -KeepRunning
 ```
 
-Expected:
+## Expected output
 
 ```text
-BRIDGE_HTTP_HEALTH=PASS
-BRIDGE_SERVICE_IDENTITY=PASS
-BRIDGE_MCP_PROTOCOL=PASS
+CWC_P3_READ_ONLY_UAT=PASS
 CHATGPT_PRIMARY_BRAIN=true
 BACKEND_MANAGER_AGENT=false
-V2_RUNTIME_DEPENDENCY=false
+SEPARATE_CHAT_UI=false
+CODEX_MODE=READ_ONLY_PROPOSAL
+LOCAL_WRITE=false
 CONNECTED_TO_CHATGPT=false
 ```
 
-The test uses the official MCP client to initialize the connection, list tools, call `delegation_health`, and verify that no direct Codex mutation tool is exposed.
+## What the UAT proves
 
-## Stop
+- exact locked dependencies install correctly;
+- strict TypeScript check, tests and build pass on the Windows host;
+- bridge HTTP identity is correct;
+- official MCP client can initialize, list tools and call `delegation_health`;
+- no direct Codex mutation tool is exposed;
+- no replacement UI, database, queue or backend Manager is started;
+- local write remains blocked;
+- no autostart is registered;
+- a machine-readable receipt is produced.
 
-```powershell
-.\scripts\windows\Stop-Bridge.ps1
-```
+## What the UAT does not prove
 
-Expected:
-
-```text
-BRIDGE_STOPPED=true
-DATA_DELETED=false
-```
+- it does not connect the bridge to ChatGPT;
+- it does not enable Secure MCP Tunnel or remote HTTPS;
+- it does not enable local write roots, scripts or actions;
+- it does not authorize production deployment;
+- it does not prove current-plan eligibility in ChatGPT UI.
 
 ## Acceptance
 
@@ -97,6 +109,7 @@ SPECIALIST_AI_MUTATION=FALSE
 CODEX_READ_ONLY_PROPOSAL=PASS
 LOCAL_WRITE_DEFAULT=BLOCKED
 NO_AUTOSTART=PASS
+RECEIPT_WRITTEN=PASS
 ```
 
-Actual ChatGPT integration remains blocked until a supported plan and Secure MCP Tunnel or reviewed HTTPS/OAuth deployment are available.
+Actual ChatGPT integration remains a separate gate requiring supported account/workspace capability and a secure remote connection path.
