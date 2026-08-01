@@ -69,31 +69,31 @@ function Write-StartupDiagnostic([System.Exception]$Failure) {
       Format-Table -AutoSize
   }
   $compose = Get-CommandOutput { & docker.exe compose --env-file .env -f compose.yml ps }
-  $logs = Get-CommandOutput { & docker.exe compose --env-file .env -f compose.yml logs --tail 80 api worker ollama }
+  $logs = Get-CommandOutput { & docker.exe compose --env-file .env -f compose.yml logs --tail 80 api worker ollama clamav }
   $report = @"
-WORKFLOW AI V2 — STARTUP DIAGNOSTIC
+WORKFLOW AI V2 - STARTUP DIAGNOSTIC
 
-Thời gian: $((Get-Date).ToString('o'))
+Timestamp: $((Get-Date).ToString('o'))
 Runtime commit: $commit
 Cutover phase: V1_ONLY
-Lỗi: $($Failure.Message)
+Error: $($Failure.Message)
 
 Scheduled Tasks:
 $tasks
 
-Cổng cục bộ:
+Local ports:
 $ports
 
 Docker Compose:
 $compose
 
-Log gần nhất:
+Recent logs:
 $logs
 
-Bí mật đã được tự động che trước khi hiển thị.
+Secrets were automatically redacted before display.
 
-Yêu cầu hỗ trợ:
-Hãy phân tích nguyên nhân, phản biện các giả định và hướng dẫn cách xử lý an toàn. Không yêu cầu tôi gửi API key, token hoặc mật khẩu.
+Support request:
+Analyze the root cause, challenge assumptions, and provide a safe recovery procedure. Do not ask for API keys, tokens, or passwords.
 "@
   $safeReport = Protect-DiagnosticText $report
   $diagnosticPath = Join-Path $diagnosticDirectory 'startup-latest.txt'
@@ -138,7 +138,7 @@ function Wait-ChatReady {
   while ((Get-Date) -lt $deadline) {
     try {
       $status = Invoke-RestMethod -Uri 'http://127.0.0.1:3100/ready' -TimeoutSec 10
-      if ($status.ready -eq $true -and $status.model -eq $true) { return }
+      if ($status.ready -eq $true -and $status.model -eq $true -and $status.malwareScanner -eq $true) { return }
       $lastError = ($status | ConvertTo-Json -Compress)
     } catch {
       $lastError = $_.Exception.Message
