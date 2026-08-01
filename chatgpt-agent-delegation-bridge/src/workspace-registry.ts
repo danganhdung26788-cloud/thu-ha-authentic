@@ -1,5 +1,6 @@
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, isAbsolute, relative, resolve } from 'node:path';
+import { basename, delimiter, isAbsolute, relative, resolve } from 'node:path';
 import {
   WorkspaceRegistrySchema,
   type WorkspaceRegistration,
@@ -11,9 +12,27 @@ function pathInside(candidate: string, parent: string): boolean {
   return relation === '' || (!relation.startsWith('..') && !isAbsolute(relation));
 }
 
+function executableName(value: string): string {
+  const trimmed = value.trim();
+  const name = basename(trimmed).toLowerCase();
+  if (!trimmed || trimmed !== basename(trimmed) || /[\\/]/u.test(trimmed)) {
+    throw new Error(`Executable allowlist entries must be command names, not paths: ${value}`);
+  }
+  return name;
+}
+
+function systemPathEntries(): string[] {
+  return (process.env.PATH ?? '')
+    .split(delimiter)
+    .map((entry) => entry.trim().replace(/^"|"$/g, ''))
+    .filter(Boolean)
+    .map((entry) => resolve(entry));
+}
+
 export class WorkspaceRegistry {
   readonly #document: WorkspaceRegistryDocument;
   readonly #byId: ReadonlyMap<string, WorkspaceRegistration>;
+  readonly #executableCache = new Map<string, string>();
 
   private constructor(document: WorkspaceRegistryDocument) {
     const seen = new Set<string>();
@@ -33,7 +52,7 @@ export class WorkspaceRegistry {
         readRoots,
         writeRoots,
         allowedScripts,
-        allowedExecutables: workspace.allowedExecutables.map((entry) => basename(entry).toLowerCase()),
+        allowedExecutables: workspace.allowedExecutables.map(executableName),
       };
     });
     if (!seen.has(document.defaultWorkspaceId)) {
@@ -83,12 +102,32 @@ export class WorkspaceRegistry {
     return absolute;
   }
 
+  hasExecutable(workspace: WorkspaceRegistration, executable: string): boolean {
+    try {
+      this.assertExecutable(workspace, executable);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   assertExecutable(workspace: WorkspaceRegistration, executable: string): string {
-    const name = basename(executable).toLowerCase();
+    const name = executableName(executable);
     if (!workspace.allowedExecutables.includes(name)) {
       throw new Error(`Executable is not allowlisted: ${name}`);
     }
-    return name;
+    const cacheKey = `${workspace.workspaceId}\u0000${name}`;
+    const cached = this.#executableCache.get(cacheKey);
+    if (cached && existsSync(cached)) return cached;
+
+    for (const directory of systemPathEntries()) {
+      const candidate = resolve(directory, name);
+      if (existsSync(candidate)) {
+        this.#executableCache.set(cacheKey, candidate);
+        return candidate;
+      }
+    }
+    throw new Error(`Allowlisted executable was not found on the system PATH: ${name}`);
   }
 
   assertScript(workspace: WorkspaceRegistration, candidate: string): string {
