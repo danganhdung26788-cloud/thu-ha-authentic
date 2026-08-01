@@ -78,9 +78,15 @@ export class DelegationService {
   }
 
   async health(): Promise<Record<string, unknown>> {
+    const workspaces = this.workspaces.list();
+    const localReadAvailable = this.config.localExecutor.enabled
+      && workspaces.some((workspace) => workspace.localRead);
+    const localWriteAvailable = this.config.localExecutor.enabled
+      && workspaces.some((workspace) => workspace.localWrite);
     return {
       ok: this.config.codex.enabled
-        || this.config.localExecutor.enabled
+        || localReadAvailable
+        || localWriteAvailable
         || this.config.specialist.enabled,
       architecture: {
         chatgptPrimaryBrain: true,
@@ -97,14 +103,19 @@ export class DelegationService {
           mode: 'READ_ONLY_PROPOSAL',
           readBoundary: 'REGISTERED_WORKSPACE_ROOT',
         },
-        localExecutor: this.#localExecutor.health(),
+        localExecutor: {
+          ...this.#localExecutor.health(),
+          readAvailable: localReadAvailable,
+          writeAvailable: localWriteAvailable,
+          publishedMode: localWriteAvailable ? 'READ_WRITE_WITH_APPROVAL' : 'READ_ONLY',
+        },
         specialistAgent: {
           enabled: this.config.specialist.enabled,
           modelConfigured: Boolean(this.config.specialist.model),
           mode: 'ANSWER_ONLY',
         },
       },
-      workspaces: this.workspaces.list(),
+      workspaces,
     };
   }
 
