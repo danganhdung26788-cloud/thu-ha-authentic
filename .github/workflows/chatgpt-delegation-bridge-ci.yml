@@ -5,12 +5,22 @@ on:
     paths:
       - "chatgpt-agent-delegation-bridge/**"
       - "docs/ADR-003-chatgpt-primary-delegation-bridge.md"
+      - "docs/ADR-004-chatgpt-to-claude-code-github.md"
+      - "docs/runbooks/CLAUDE_CODE_GITHUB_SETUP.md"
+      - "CLAUDE.md"
+      - ".github/ISSUE_TEMPLATE/claude-code-task.yml"
+      - ".github/workflows/claude-code.yml"
       - ".github/workflows/chatgpt-delegation-bridge-ci.yml"
   push:
     branches: [main]
     paths:
       - "chatgpt-agent-delegation-bridge/**"
       - "docs/ADR-003-chatgpt-primary-delegation-bridge.md"
+      - "docs/ADR-004-chatgpt-to-claude-code-github.md"
+      - "docs/runbooks/CLAUDE_CODE_GITHUB_SETUP.md"
+      - "CLAUDE.md"
+      - ".github/ISSUE_TEMPLATE/claude-code-task.yml"
+      - ".github/workflows/claude-code.yml"
       - ".github/workflows/chatgpt-delegation-bridge-ci.yml"
 
 permissions:
@@ -40,11 +50,28 @@ jobs:
           ! grep -R -E "bullmq|ioredis|chat-page|admin-page|runManagerDecision|manager-agent" src
           ! grep -R -E "<html|<textarea" src
           ! grep -R -E "HermesSpecialist|inspectWithHermes|executeWithHermes|HERMES_ENABLED" src
+      - name: Claude Code route contract
+        shell: bash
+        run: |
+          test -f ../CLAUDE.md
+          test -f ../docs/ADR-004-chatgpt-to-claude-code-github.md
+          test -f ../docs/runbooks/CLAUDE_CODE_GITHUB_SETUP.md
+          test -f ../.github/ISSUE_TEMPLATE/claude-code-task.yml
+          test -f ../.github/workflows/claude-code.yml
+          grep -F "github.actor == 'danganhdung26788-cloud'" ../.github/workflows/claude-code.yml
+          grep -F 'claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}' ../.github/workflows/claude-code.yml
+          grep -F 'branch_prefix: "claude/"' ../.github/workflows/claude-code.yml
+          grep -F 'uses: anthropics/claude-code-action@v1' ../.github/workflows/claude-code.yml
+          grep -F 'Do not merge a Pull Request.' ../CLAUDE.md
+          grep -F 'Do not call another AI' ../CLAUDE.md
+          ! grep -E "pull_request_target|workflow_dispatch|^[[:space:]]*schedule:" ../.github/workflows/claude-code.yml
+          ! grep -F "anthropic_api_key:" ../.github/workflows/claude-code.yml
       - name: Secret scan
         shell: bash
         run: |
-          ! grep -R -E "sk-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY" . \
-            --exclude-dir=node_modules --exclude-dir=dist --exclude='*.test.ts'
+          SECRET_PATTERN="sk-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY"
+          ! grep -R -E "$SECRET_PATTERN" . --exclude-dir=node_modules --exclude-dir=dist --exclude='*.test.ts'
+          ! grep -E "$SECRET_PATTERN" ../CLAUDE.md ../README.md ../docs/ADR-004-chatgpt-to-claude-code-github.md ../docs/runbooks/CLAUDE_CODE_GITHUB_SETUP.md ../.github/ISSUE_TEMPLATE/claude-code-task.yml ../.github/workflows/claude-code.yml ../.github/workflows/chatgpt-delegation-bridge-ci.yml
 
   windows:
     runs-on: windows-latest
