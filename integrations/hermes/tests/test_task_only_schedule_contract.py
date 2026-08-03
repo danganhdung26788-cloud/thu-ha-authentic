@@ -11,14 +11,37 @@ class TaskOnlyScheduleContractTests(unittest.TestCase):
     def test_schedule_cutover_has_plan_backup_apply_and_rollback(self):
         text = (ROOT / "configure_task_only_schedules.ps1").read_text(encoding="utf-8")
         self.assertIn('[ValidateSet("Plan", "Apply", "Rollback")]', text)
-        self.assertIn('TaskflowDailyBriefMorning', text)
-        self.assertIn('TaskflowDailyBriefMidday', text)
-        self.assertIn('HermesTaskChecklistMorning', text)
-        self.assertIn('HermesTaskChecklistMidday', text)
-        self.assertIn('Export-ScheduledTask', text)
-        self.assertIn('Disable-ScheduledTask', text)
-        self.assertIn('Restore-LegacySchedules', text)
-        self.assertIn('TASK_ONLY_MODE', text)
+        for legacy in (
+            "Hermes-Operations-Daily-Command-Center",
+            "TaskflowDailyBriefMorning",
+            "TaskflowDailyBriefMidday",
+            "Hermes-Operations-Conditional-Close",
+            "TaskflowDailyBriefAfternoon",
+            "TaskflowDailyBriefEvening",
+            "TaskflowDailyBriefEveningReview",
+        ):
+            self.assertIn(legacy, text)
+        for replacement in (
+            "HermesTaskChecklistCommandCenter",
+            "HermesTaskChecklistMidday",
+            "HermesTaskChecklistAfternoonClose",
+            "HermesTaskChecklistEveningReview",
+        ):
+            self.assertIn(replacement, text)
+        self.assertIn("Export-ScheduledTask", text)
+        self.assertIn("Disable-ScheduledTask", text)
+        self.assertIn("Restore-LegacySchedules", text)
+        self.assertIn("manifest.json", text)
+        self.assertIn("TASK_ONLY_MODE", text)
+
+    def test_schedule_cutover_is_single_pipeline_and_idempotent(self):
+        text = (ROOT / "configure_task_only_schedules.ps1").read_text(encoding="utf-8")
+        self.assertIn("one task-only replacement", text)
+        self.assertIn("Test-AlreadyApplied", text)
+        self.assertIn("TASK_ONLY_SCHEDULE_APPLY=IDEMPOTENT_PASS", text)
+        self.assertIn("Partial cutover detected", text)
+        self.assertIn("run_task_checklist_digest.ps1", text)
+        self.assertNotIn("taskflow_daily_brief.py", text)
 
     def test_task_only_runner_cannot_fall_back_to_legacy_brief(self):
         text = (ROOT / "run_task_checklist_digest.ps1").read_text(encoding="utf-8")
