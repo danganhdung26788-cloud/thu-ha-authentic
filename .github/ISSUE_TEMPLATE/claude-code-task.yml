@@ -1,0 +1,103 @@
+name: Claude Code task
+description: Giao một nhiệm vụ viết hoặc sửa code cho Claude Code qua GitHub
+title: "[CLAUDE-CODE] "
+labels: []
+assignees:
+  - danganhdung26788-cloud
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ChatGPT tạo Issue này từ yêu cầu của chủ sở hữu. Chỉ kích hoạt Claude sau khi toàn bộ phạm vi và tiêu chí đã rõ.
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: Mục tiêu
+      description: Kết quả code cần đạt.
+      placeholder: Mô tả hành vi cần thêm hoặc lỗi cần sửa.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Phạm vi được phép thay đổi
+      description: Liệt kê thư mục, file hoặc module Claude được phép sửa.
+      placeholder: |
+        - src/...
+        - test/...
+    validations:
+      required: true
+
+  - type: textarea
+    id: source
+    attributes:
+      label: Nguồn và bối cảnh
+      description: Issue, tài liệu, lỗi, log đã làm sạch hoặc đường dẫn repository liên quan.
+    validations:
+      required: true
+
+  - type: textarea
+    id: requirements
+    attributes:
+      label: Yêu cầu bắt buộc
+      placeholder: |
+        - Không thay đổi API công khai
+        - Có test cho trường hợp mới
+        - Không ghi secret vào log
+    validations:
+      required: true
+
+  - type: textarea
+    id: do_not_change
+    attributes:
+      label: Không được thay đổi
+      placeholder: |
+        - Database production
+        - Repository settings
+        - Credential và secret
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Lệnh kiểm tra
+      placeholder: |
+        - npm run check
+        - npm test
+        - npm run build
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Tiêu chí nghiệm thu
+      placeholder: |
+        - Chức năng hoạt động đúng
+        - Test PASS
+        - CI PASS
+        - Không thay đổi ngoài phạm vi
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: gates
+    attributes:
+      label: Approval Gate
+      options:
+        - label: Không merge tự động
+          required: true
+        - label: Không deploy
+          required: true
+        - label: Không thay quyền, secret, credential hoặc repository settings
+          required: true
+        - label: Dừng và báo NEED_OWNER_APPROVAL nếu phải mở rộng phạm vi
+          required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        Khi Issue đã hoàn chỉnh, chủ repo thêm bình luận bắt đầu bằng `&#64;claude` để kích hoạt Claude Code.
